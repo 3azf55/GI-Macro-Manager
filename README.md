@@ -173,3 +173,13 @@ Open Sans is licensed under the SIL Open Font License 1.1. See [Third-Party Noti
 
 - GitHub: https://github.com/3azf55/GI-Macro-Manager
 - Discord: https://discord.gg/H8HNhvqqm
+
+## License
+
+The original source code of GI Macro Manager is licensed under the
+[MIT License](LICENSE).
+
+Third-party fonts, libraries, images, sounds, macro timing references,
+and other external assets remain subject to their respective licenses
+and ownership. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+and [Macro Timing Credits](docs/MACRO_CREDITS.md).
