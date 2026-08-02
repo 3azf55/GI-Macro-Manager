@@ -1,11 +1,12 @@
 # Repository Inventory
 
-Total tracked-source files before Git: 50
+Total source files: 54
 
 - `.editorconfig`
 - `.gitattributes`
 - `.github/ISSUE_TEMPLATE/bug_report.md`
 - `.github/ISSUE_TEMPLATE/feature_request.md`
+- `.github/workflows/release.yml`
 - `.gitignore`
 - `Assets/fonts/README.txt`
 - `Assets/icons/README.txt`
@@ -41,6 +42,7 @@ Total tracked-source files before Git: 50
 - `UIHost/MainForm.cs`
 - `UIHost/Program.cs`
 - `UIHost/UMM.UI.csproj`
+- `UIHost/UpdateService.cs`
 - `UIHost/app.manifest`
 - `UIHost/ui/app.js`
 - `UIHost/ui/build-info.json`
@@ -49,6 +51,8 @@ Total tracked-source files before Git: 50
 - `UMM.Engine.ahk`
 - `docs/ARCHITECTURE.md`
 - `docs/MACRO_PACKAGES.md`
+- `docs/UPDATES.md`
 - `scripts/build-and-stage.cmd`
 - `scripts/build-and-stage.ps1`
 - `scripts/diagnose-nuget.cmd`
+- `docs/REPOSITORY_INVENTORY.md`

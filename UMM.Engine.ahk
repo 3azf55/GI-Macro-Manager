@@ -70,7 +70,7 @@ global AssetsDir := ""
 global IconDir := ""
 global PortraitDir := ""
 global SoundDir := ""
-global AppVersion := "v1.5.2"
+global AppVersion := "v1.6.1"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -948,6 +948,13 @@ MacroCatalog_Initialize() {
         ExitApp
     }
 
+    ; AutoHotkey v1 INI enumeration can ignore the first section when a
+    ; UTF-8 BOM appears directly before its opening bracket.
+    if (!MacroCatalog_RemoveUtf8Bom()) {
+        MsgBox, 48, Macro Manager, The macro registry encoding could not be normalized:`n%MacroRegistryFile%
+        ExitApp
+    }
+
     ; Compatibility migrations are schema-gated and normally run once.
     ; Daily startup reads only the dynamic registry after the schema is current.
     if (!MacroCatalog_ApplyMigrations()) {
@@ -959,6 +966,68 @@ MacroCatalog_Initialize() {
         ExitApp
     }
 }
+
+MacroCatalog_RemoveUtf8Bom() {
+    global MacroRegistryFile
+
+    inputFile := FileOpen(MacroRegistryFile, "r")
+    if (!IsObject(inputFile))
+        return false
+
+    fileLength := inputFile.Length
+    if (fileLength < 3) {
+        inputFile.Close()
+        return true
+    }
+
+    firstByte := inputFile.ReadUChar()
+    secondByte := inputFile.ReadUChar()
+    thirdByte := inputFile.ReadUChar()
+
+    if (firstByte != 0xEF || secondByte != 0xBB || thirdByte != 0xBF) {
+        inputFile.Close()
+        return true
+    }
+
+    remainingLength := fileLength - 3
+    VarSetCapacity(fileData, remainingLength, 0)
+    bytesRead := 0
+
+    if (remainingLength > 0)
+        bytesRead := inputFile.RawRead(fileData, remainingLength)
+
+    inputFile.Close()
+
+    if (remainingLength > 0 && bytesRead != remainingLength)
+        return false
+
+    tempPath := MacroRegistryFile . ".nobom." . A_TickCount . ".tmp"
+    FileDelete, %tempPath%
+
+    outputFile := FileOpen(tempPath, "w")
+    if (!IsObject(outputFile))
+        return false
+
+    bytesWritten := 0
+    if (remainingLength > 0)
+        bytesWritten := outputFile.RawWrite(fileData, remainingLength)
+
+    outputFile.Close()
+
+    if (remainingLength > 0 && bytesWritten != remainingLength) {
+        FileDelete, %tempPath%
+        return false
+    }
+
+    FileMove, %tempPath%, %MacroRegistryFile%, 1
+    if (ErrorLevel) {
+        FileDelete, %tempPath%
+        return false
+    }
+
+    return true
+}
+
 
 MacroCatalog_ApplyMigrations() {
     global ConfigFile, CurrentCatalogSchemaVersion

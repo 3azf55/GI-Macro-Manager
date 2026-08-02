@@ -104,6 +104,22 @@ try {
         throw "Macros folder was not found: $Macros"
     }
 
+    # AutoHotkey v1 can skip the first INI section when registry.ini starts
+    # with an UTF-8 BOM. Always stage the catalog as UTF-8 without BOM.
+    $StagedRegistry = Join-Path $PublishTemp "Macros\registry.ini"
+    if (-not (Test-Path $StagedRegistry)) {
+        throw "The staged macro registry was not found: $StagedRegistry"
+    }
+
+    $RegistryText = [System.IO.File]::ReadAllText(
+        $StagedRegistry,
+        [System.Text.Encoding]::UTF8)
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText(
+        $StagedRegistry,
+        $RegistryText,
+        $Utf8NoBom)
+
     if (Test-Path $Dist) {
         Remove-Item $Dist -Recurse -Force
     }

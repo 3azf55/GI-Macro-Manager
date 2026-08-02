@@ -189,7 +189,7 @@
       <section class="page" data-page-panel="about">
         <div class="page-heading">
           <div><span class="eyebrow" data-i18n="projectCommunity">PROJECT & COMMUNITY</span><h1 data-i18n="aboutTitle">About</h1></div>
-          <p data-i18n="aboutDescription">This program is free and open source.</p>
+          <p data-i18n="aboutDescription">A configurable macro manager for Windows.</p>
         </div>
 
         <div class="community-grid">
@@ -213,6 +213,27 @@
             <span class="community-arrow">↗</span>
           </button>
         </div>
+
+        <article class="update-card" aria-labelledby="updateCardTitle">
+          <span class="update-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M20 7v5h-5M4 17v-5h5M18.2 9A7 7 0 0 0 6.6 6.6L4 9M5.8 15A7 7 0 0 0 17.4 17.4L20 15"/>
+            </svg>
+          </span>
+          <span class="update-copy">
+            <strong id="updateCardTitle" data-i18n="updatesTitle">Updates</strong>
+            <small id="updateStatusText" data-i18n="updatesIdle">Check GitHub for new releases.</small>
+            <span class="update-progress hidden" id="updateProgress" aria-hidden="true">
+              <span id="updateProgressBar"></span>
+            </span>
+          </span>
+          <span class="update-actions">
+            <button class="secondary-button compact-button hidden" id="viewReleaseButton" type="button" data-i18n="viewRelease">View release</button>
+            <button class="secondary-button compact-button" id="checkUpdateButton" type="button" data-i18n="checkUpdates">Check for updates</button>
+            <button class="primary-button compact-button hidden" id="installUpdateButton" type="button" data-i18n="installUpdate">Download & install</button>
+          </span>
+        </article>
+
         <footer class="about-meta" aria-label="Build information" data-i18n-aria="buildInformation">
           <div class="about-build">
             <span><span data-i18n="versionLabel">Version</span> <strong id="aboutVersion">—</strong></span>

@@ -58,3 +58,18 @@ and runs input cleanup.
 4. creates `bridge/commands`;
 5. validates essential files;
 6. moves the staged output to `dist`.
+
+
+## GitHub update system
+
+`UIHost/UpdateService.cs` handles the update lifecycle:
+
+1. Query the latest stable GitHub Release.
+2. Compare the release tag with the UI assembly version.
+3. Select and download the complete Windows runtime ZIP.
+4. Verify the optional SHA-256 digest and safely extract the archive.
+5. Merge the installed macro registry with the release registry.
+6. Start an external PowerShell installer after the UI and engine exit.
+7. Replace runtime files and restart `UMM.Engine.ahk`.
+
+The WebView2 About page communicates directly with the C# host for update actions; update commands are not forwarded to the AutoHotkey engine.

@@ -57,6 +57,8 @@
   user-select: none;
 }
 input, textarea { -webkit-user-select: text; user-select: text; }
+.hidden { display: none !important; }
+
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input { font: inherit; }
 button { border: 0; color: inherit; cursor: pointer; }
@@ -787,6 +789,58 @@ select:disabled {
 .community-copy small { color: var(--muted); font-size: 10px; }
 .community-arrow { color: var(--muted); font-size: 17px; }
 
+.update-card {
+  margin-top: 14px;
+  padding: 15px 17px;
+  border: 1px solid var(--outline);
+  border-radius: 22px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface);
+}
+.update-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-active);
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--outline);
+}
+.update-icon svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.update-copy { min-width: 0; display: grid; gap: 5px; }
+.update-copy strong { font-size: 13px; }
+.update-copy small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.update-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.compact-button { min-height: 36px; padding: 0 13px; border-radius: 12px; font-size: 10px; white-space: nowrap; }
+.update-progress {
+  width: min(330px, 100%);
+  height: 4px;
+  margin-top: 2px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-high);
+}
+.update-progress > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width .18s ease;
+}
+
 .about-meta {
   margin-top: 17px;
   padding: 13px 3px 0;
@@ -1098,6 +1152,15 @@ select:disabled {
 
 :root[data-theme="light"] .modal-backdrop {
   background: rgba(40, 51, 72, .4);
+}
+
+:root[data-theme="light"] .update-card {
+  background: #ffffff;
+  border-color: rgba(26, 39, 64, .16);
+}
+:root[data-theme="light"] .update-icon {
+  background: #eef2ff;
+  border-color: rgba(52, 88, 199, .16);
 }
 
 :root[data-theme="light"] .hotkey-modal {

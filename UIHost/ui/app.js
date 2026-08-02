@@ -1,11 +1,11 @@
 const bridge = window.chrome?.webview;
 
-// Replace these empty values with the real project/community URLs.
-// Example: github: "https://github.com/username/project"
 const communityLinks = {
-  github: "",
+  github: "https://github.com/3azf55/GI-Macro-Manager",
   discord: "https://discord.gg/H8HNhvqqm"
 };
+
+const releasesUrl = "https://github.com/3azf55/GI-Macro-Manager/releases";
 
 const THEME_STORAGE_KEY = "umm-theme";
 
@@ -13,6 +13,18 @@ let buildInfo = {
   version: "—",
   buildDate: "—"
 };
+
+let updateState = {
+  status: "idle",
+  message: "Check GitHub for new releases.",
+  currentVersion: "",
+  latestVersion: "",
+  releaseUrl: releasesUrl,
+  canInstall: false,
+  progress: null
+};
+
+let lastAnnouncedUpdate = "";
 
 const translations = {
   controlCenter: "CONTROL CENTER",
@@ -32,9 +44,14 @@ const translations = {
   selectedExecutable: "SELECTED EXECUTABLE",
   projectCommunity: "PROJECT & COMMUNITY",
   aboutTitle: "About",
-  aboutDescription: "This program is free and open source.",
+  aboutDescription: "A configurable macro manager for Windows.",
   githubDescription: "Project source and releases",
   discordDescription: "Community and support",
+  updatesTitle: "Updates",
+  updatesIdle: "Check GitHub for new releases.",
+  checkUpdates: "Check for updates",
+  installUpdate: "Download & install",
+  viewRelease: "View release",
   versionLabel: "Version",
   builtLabel: "Built",
   captureHotkey: "CAPTURE HOTKEY",
@@ -219,6 +236,36 @@ function applyMessage(message) {
     return;
   }
 
+  if (message.type === "updateStatus") {
+    updateState = {
+      ...updateState,
+      ...message,
+      canInstall: boolValue(message.canInstall),
+      progress: message.progress === "" || message.progress == null
+        ? null
+        : Number(message.progress)
+    };
+
+    renderUpdateStatus();
+
+    const manual = boolValue(message.manual);
+    if (message.status === "available" && message.latestVersion) {
+      if (lastAnnouncedUpdate !== message.latestVersion) {
+        lastAnnouncedUpdate = message.latestVersion;
+        showToast(`${message.latestVersion} is available.`);
+      }
+    } else if (message.status === "installed") {
+      showToast(message.message || "Update installed successfully.");
+    } else if (message.status === "error" && manual) {
+      showToast(message.message || "The update operation failed.", true);
+    } else if (message.status === "current" && manual) {
+      showToast(message.message || "Macro Manager is up to date.");
+    } else if (message.status === "noRelease" && manual) {
+      showToast(message.message || "No published release is available.", true);
+    }
+    return;
+  }
+
   if (message.type === "error") {
     showToast(message.message || t("engineRejected"), true);
     post("requestState");
@@ -247,6 +294,7 @@ function render() {
   renderHotkeys();
   renderStartup();
   renderAboutMeta();
+  renderUpdateStatus();
 }
 
 
@@ -741,6 +789,46 @@ function formatBuildDate(value) {
   }).format(parsed);
 }
 
+function renderUpdateStatus() {
+  const statusText = $("#updateStatusText");
+  const checkButton = $("#checkUpdateButton");
+  const installButton = $("#installUpdateButton");
+  const viewButton = $("#viewReleaseButton");
+  const progressTrack = $("#updateProgress");
+  const progressBar = $("#updateProgressBar");
+
+  if (!statusText || !checkButton || !installButton || !viewButton) return;
+
+  const busy = ["checking", "downloading", "installing", "busy"].includes(updateState.status);
+  statusText.textContent = updateState.message || t("updatesIdle");
+  checkButton.disabled = busy;
+  checkButton.textContent = updateState.status === "checking"
+    ? "Checking…"
+    : t("checkUpdates");
+
+  const canInstall = updateState.status === "available" && updateState.canInstall;
+  installButton.classList.toggle("hidden", !canInstall);
+  installButton.disabled = busy || state.macroRunning;
+  installButton.textContent = state.macroRunning
+    ? "Release trigger first"
+    : t("installUpdate");
+
+  const releaseUrl = updateState.releaseUrl || releasesUrl;
+  viewButton.classList.toggle(
+    "hidden",
+    !releaseUrl || updateState.status === "idle" || updateState.status === "checking"
+  );
+  viewButton.disabled = busy && updateState.status !== "downloading";
+
+  const hasProgress = Number.isFinite(updateState.progress) &&
+    ["downloading", "installing"].includes(updateState.status);
+  progressTrack.classList.toggle("hidden", !hasProgress);
+  progressTrack.setAttribute("aria-hidden", hasProgress ? "false" : "true");
+  progressBar.style.width = hasProgress
+    ? `${Math.max(0, Math.min(100, updateState.progress))}%`
+    : "0%";
+}
+
 function renderAboutMeta() {
   const version = buildInfo.version !== "—" ? buildInfo.version : (state.version || "—");
   $("#aboutVersion").textContent = version;
@@ -1027,6 +1115,13 @@ $('#resetHotkeysButton').addEventListener('click', () => {
 });
 $('#themeToggle').addEventListener('click', toggleTheme);
 $$('[data-community-link]').forEach(button => button.addEventListener('click', () => openCommunityLink(button.dataset.communityLink)));
+$('#checkUpdateButton').addEventListener('click', () => post('checkForUpdates'));
+$('#installUpdateButton').addEventListener('click', () => {
+  if (!state.macroRunning) post('installUpdate');
+});
+$('#viewReleaseButton').addEventListener('click', () => {
+  post('openExternal', { url: updateState.releaseUrl || releasesUrl });
+});
 $('#cancelHotkeyButton').addEventListener('click', endHotkeyCapture);
 $('#addMacroButton').addEventListener('click', openMacroImport);
 $('#exportMacroButton').addEventListener('click', () => {

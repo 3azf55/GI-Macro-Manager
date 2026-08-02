@@ -27,10 +27,17 @@ public sealed class MainForm : Form
     private readonly EventWaitHandle _activationEvent;
     private readonly System.Windows.Forms.Timer _windowPlacementTimer = new();
     private readonly string _windowPlacementPath;
+    private readonly string _lastUpdateCheckPath;
+    private readonly GitHubUpdateService _updateService = new();
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private UpdateCheckResult? _availableUpdate;
     private nint _engineHwnd;
     private bool _webReady;
     private bool _engineConnected;
     private bool _windowPlacementReady;
+    private bool _macroRunning;
+    private bool _updateOperationInProgress;
+    private bool _closingForUpdate;
     private DateTime _lastStateWriteUtc = DateTime.MinValue;
     private DateTime _lastErrorWriteUtc = DateTime.MinValue;
 
@@ -52,6 +59,7 @@ public sealed class MainForm : Form
             "MacroManager");
         Directory.CreateDirectory(settingsDirectory);
         _windowPlacementPath = Path.Combine(settingsDirectory, "window-placement.json");
+        _lastUpdateCheckPath = Path.Combine(settingsDirectory, "last-update-check.txt");
 
         _bridgeDirectory = Path.Combine(_rootDirectory, "bridge");
         _commandsDirectory = Path.Combine(_bridgeDirectory, "commands");
@@ -187,6 +195,11 @@ public sealed class MainForm : Form
                     ["status"] = "connecting"
                 });
                 BeginFileBridge();
+                PostPreviousUpdateResult();
+                if (ShouldRunAutomaticUpdateCheck())
+                {
+                    _ = CheckForUpdatesAsync(manual: false);
+                }
             };
 
             core.Navigate("https://app.umm/index.html");
@@ -241,6 +254,12 @@ public sealed class MainForm : Form
                     return;
                 case "openExternal":
                     OpenExternal(root);
+                    return;
+                case "checkForUpdates":
+                    _ = CheckForUpdatesAsync(manual: true);
+                    return;
+                case "installUpdate":
+                    _ = InstallAvailableUpdateAsync();
                     return;
             }
 
@@ -387,6 +406,9 @@ public sealed class MainForm : Form
 
             _lastStateWriteUtc = writeUtc;
             _engineConnected = true;
+            _macroRunning = state.TryGetValue("macroRunning", out var macroRunningText) &&
+                (macroRunningText.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                 macroRunningText.Equals("true", StringComparison.OrdinalIgnoreCase));
             state["connected"] = "1";
             PostToWeb(state);
         }
@@ -669,8 +691,341 @@ public sealed class MainForm : Form
         SaveWindowPlacement();
         _singleInstanceTimer.Stop();
         _bridgeTimer.Stop();
-        SendEngineCommand("uiClosed", reportFailure: false);
+        _lifetimeCancellation.Cancel();
+
+        if (!_closingForUpdate)
+        {
+            SendEngineCommand("uiClosed", reportFailure: false);
+        }
+
+        _updateService.Dispose();
     }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (_updateOperationInProgress)
+        {
+            if (manual)
+            {
+                PostUpdateStatus(
+                    "busy",
+                    "An update operation is already in progress.",
+                    manual: true);
+            }
+
+            return;
+        }
+
+        _updateOperationInProgress = true;
+        PostUpdateStatus(
+            "checking",
+            "Checking GitHub for the latest release…",
+            manual);
+
+        try
+        {
+            var currentVersion = GitHubUpdateService.NormalizeVersion(
+                typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0, 0));
+
+            var result = await _updateService.CheckAsync(
+                currentVersion,
+                _lifetimeCancellation.Token);
+
+            _availableUpdate = result.Status == UpdateAvailability.Available
+                ? result
+                : null;
+
+            RecordAutomaticUpdateCheck();
+
+            switch (result.Status)
+            {
+                case UpdateAvailability.NoRelease:
+                    PostUpdateStatus(
+                        "noRelease",
+                        "No published GitHub release is available yet.",
+                        manual,
+                        result);
+                    break;
+
+                case UpdateAvailability.Current:
+                    PostUpdateStatus(
+                        "current",
+                        $"You are using the latest version ({FormatVersion(result.CurrentVersion)}).",
+                        manual,
+                        result);
+                    break;
+
+                case UpdateAvailability.Available:
+                    var canInstall = result.Asset is not null && CanSelfUpdate();
+                    var message = result.Asset is null
+                        ? $"{result.TagName} is available, but the release has no runtime ZIP asset."
+                        : canInstall
+                            ? $"{result.TagName} is available and ready to install."
+                            : $"{result.TagName} is available. Install it from the Releases page because this is not a packaged runtime build.";
+
+                    PostUpdateStatus(
+                        "available",
+                        message,
+                        manual,
+                        result,
+                        canInstall);
+                    break;
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // The application is closing.
+        }
+        catch (HttpRequestException exception)
+        {
+            PostUpdateStatus(
+                "error",
+                $"GitHub could not be reached: {exception.Message}",
+                manual);
+        }
+        catch (Exception exception)
+        {
+            PostUpdateStatus(
+                "error",
+                $"The update check failed: {exception.Message}",
+                manual);
+        }
+        finally
+        {
+            _updateOperationInProgress = false;
+        }
+    }
+
+    private async Task InstallAvailableUpdateAsync()
+    {
+        if (_availableUpdate is null)
+        {
+            await CheckForUpdatesAsync(manual: true);
+            if (_availableUpdate is null)
+            {
+                return;
+            }
+        }
+
+        if (_updateOperationInProgress)
+        {
+            PostUpdateStatus(
+                "busy",
+                "An update operation is already in progress.",
+                manual: true,
+                _availableUpdate);
+            return;
+        }
+
+        if (!_engineConnected)
+        {
+            PostUpdateStatus(
+                "error",
+                "The macro engine must be connected before installing an update.",
+                manual: true,
+                _availableUpdate);
+            return;
+        }
+
+        if (_macroRunning)
+        {
+            PostUpdateStatus(
+                "error",
+                "Release the macro trigger before installing an update.",
+                manual: true,
+                _availableUpdate);
+            return;
+        }
+
+        if (_availableUpdate.Asset is null)
+        {
+            PostUpdateStatus(
+                "error",
+                "This release does not contain an installable runtime ZIP.",
+                manual: true,
+                _availableUpdate);
+            return;
+        }
+
+        if (!CanSelfUpdate())
+        {
+            PostUpdateStatus(
+                "error",
+                "Automatic installation is available only in a packaged runtime build. Open the release page to update this development copy.",
+                manual: true,
+                _availableUpdate);
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            $"Install {_availableUpdate.TagName}?\n\n" +
+            "Macro Manager will close, replace its application files, preserve settings and custom macros, then restart.",
+            "Install update",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button2);
+
+        if (confirmation != DialogResult.Yes)
+        {
+            return;
+        }
+
+        _updateOperationInProgress = true;
+        var progress = new Progress<int>(percentage =>
+        {
+            PostUpdateStatus(
+                "downloading",
+                $"Downloading {_availableUpdate.TagName}… {percentage}%",
+                manual: true,
+                _availableUpdate,
+                canInstall: true,
+                progress: percentage);
+        });
+
+        try
+        {
+            PostUpdateStatus(
+                "downloading",
+                $"Downloading {_availableUpdate.TagName}…",
+                manual: true,
+                _availableUpdate,
+                canInstall: true,
+                progress: 0);
+
+            var prepared = await _updateService.DownloadAndPrepareAsync(
+                _availableUpdate,
+                _rootDirectory,
+                progress,
+                _lifetimeCancellation.Token);
+
+            PostUpdateStatus(
+                "installing",
+                "The update is ready. Macro Manager is closing to install it…",
+                manual: true,
+                _availableUpdate,
+                canInstall: false,
+                progress: 100);
+
+            _ = GitHubUpdateService.StartInstaller(
+                prepared,
+                _rootDirectory,
+                _enginePid,
+                Environment.ProcessId);
+
+            _closingForUpdate = true;
+            SendEngineCommand("exitEngine", reportFailure: false);
+            Close();
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // The application is closing.
+        }
+        catch (Exception exception)
+        {
+            PostUpdateStatus(
+                "error",
+                $"The update could not be installed: {exception.Message}",
+                manual: true,
+                _availableUpdate);
+        }
+        finally
+        {
+            _updateOperationInProgress = false;
+        }
+    }
+
+    private void PostPreviousUpdateResult()
+    {
+        var result = GitHubUpdateService.ReadAndDeletePreviousResult();
+        if (result is null)
+        {
+            return;
+        }
+
+        var status = result.Status.Equals("success", StringComparison.OrdinalIgnoreCase)
+            ? "installed"
+            : "error";
+        var message = result.Status.Equals("success", StringComparison.OrdinalIgnoreCase)
+            ? $"Updated successfully to {result.Version}."
+            : $"The previous update failed: {result.Message}";
+
+        PostUpdateStatus(
+            status,
+            message,
+            manual: true,
+            releaseUrl: GitHubUpdateService.ReleasesUrl);
+    }
+
+    private void PostUpdateStatus(
+        string status,
+        string message,
+        bool manual,
+        UpdateCheckResult? release = null,
+        bool canInstall = false,
+        int progress = -1,
+        string? releaseUrl = null)
+    {
+        var currentVersion = GitHubUpdateService.NormalizeVersion(
+            typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0, 0));
+
+        PostToWeb(new Dictionary<string, string>
+        {
+            ["type"] = "updateStatus",
+            ["status"] = status,
+            ["message"] = message,
+            ["manual"] = manual ? "1" : "0",
+            ["currentVersion"] = FormatVersion(currentVersion),
+            ["latestVersion"] = release?.TagName ?? string.Empty,
+            ["releaseName"] = release?.ReleaseName ?? string.Empty,
+            ["releaseNotes"] = release?.ReleaseNotes ?? string.Empty,
+            ["releaseUrl"] = releaseUrl ?? release?.ReleaseUrl ?? GitHubUpdateService.ReleasesUrl,
+            ["assetName"] = release?.Asset?.Name ?? string.Empty,
+            ["canInstall"] = canInstall ? "1" : "0",
+            ["progress"] = progress >= 0 ? progress.ToString() : string.Empty
+        });
+    }
+
+    private bool ShouldRunAutomaticUpdateCheck()
+    {
+        try
+        {
+            if (!File.Exists(_lastUpdateCheckPath))
+            {
+                return true;
+            }
+
+            var lastCheckUtc = File.GetLastWriteTimeUtc(_lastUpdateCheckPath);
+            return DateTime.UtcNow - lastCheckUtc >= TimeSpan.FromHours(6);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private void RecordAutomaticUpdateCheck()
+    {
+        try
+        {
+            File.WriteAllText(
+                _lastUpdateCheckPath,
+                DateTime.UtcNow.ToString("O"),
+                new System.Text.UTF8Encoding(false));
+        }
+        catch
+        {
+            // Failure to store the throttle timestamp must not block updates.
+        }
+    }
+
+    private bool CanSelfUpdate() =>
+        File.Exists(Path.Combine(_rootDirectory, "UMM.UI.exe")) &&
+        File.Exists(Path.Combine(_rootDirectory, "UMM.Engine.ahk")) &&
+        Directory.Exists(Path.Combine(_rootDirectory, "ui"));
+
+    private static string FormatVersion(Version version) =>
+        $"v{version.Major}.{version.Minor}.{Math.Max(0, version.Build)}";
 
     private void BrowseForExecutable()
     {
