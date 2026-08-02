@@ -132,7 +132,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub Release publishing failed."
           }
-    notify-discord:
+
+  notify-discord:
     needs: build-release
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -157,18 +158,23 @@ jobs:
           python3 <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
-          webhook_url = os.environ.get("DISCORD_WEBHOOK")
+          webhook_url = os.environ.get("DISCORD_WEBHOOK", "").strip()
           if not webhook_url:
-              raise RuntimeError("DISCORD_WEBHOOK repository secret is missing.")
+              raise RuntimeError(
+                  "DISCORD_WEBHOOK repository secret is missing or empty."
+              )
 
-          with open("release.json", encoding="utf-8") as file:
-              release = json.load(file)
+          with open("release.json", encoding="utf-8") as release_file:
+              release = json.load(release_file)
 
-          rel_name = release.get("name") or os.environ["RELEASE_TAG"]
-          rel_url = release.get("url") or ""
-          rel_body = (release.get("body") or "No details provided.")[:4000]
+          release_name = release.get("name") or os.environ["RELEASE_TAG"]
+          release_url = release.get("url") or ""
+          release_body = (
+              release.get("body") or "No details provided."
+          )[:4000]
 
           payload = {
               "content": (
@@ -180,32 +186,34 @@ jobs:
               "allowed_mentions": {
                   "roles": ["1533499842293137608"]
               },
-              "embeds": [{
-                  "title": f"📌 {rel_name}",
-                  "url": rel_url,
-                  "description": rel_body,
-                  "color": 3066993,
-                  "fields": [
-                      {
-                          "name": "📥 Download & Setup",
-                          "value": (
-                              f"• [Official Download Link]({rel_url})\n"
-                              "• Installation steps available in "
-                              "<#1532699557195157594>"
-                          ),
-                          "inline": False
-                      },
-                      {
-                          "name": "💬 Support & Feedback",
-                          "value": (
-                              "Experiencing issues? Report them in "
-                              "<#1532700234394898472> or share ideas in "
-                              "<#1532700380020871218>!"
-                          ),
-                          "inline": False
-                      }
-                  ]
-              }]
+              "embeds": [
+                  {
+                      "title": f"📌 {release_name}",
+                      "url": release_url,
+                      "description": release_body,
+                      "color": 3066993,
+                      "fields": [
+                          {
+                              "name": "📥 Download & Setup",
+                              "value": (
+                                  f"• [Official Download Link]({release_url})\n"
+                                  "• Installation steps available in "
+                                  "<#1532699557195157594>"
+                              ),
+                              "inline": False
+                          },
+                          {
+                              "name": "💬 Support & Feedback",
+                              "value": (
+                                  "Experiencing issues? Report them in "
+                                  "<#1532700234394898472> or share ideas in "
+                                  "<#1532700380020871218>!"
+                              ),
+                              "inline": False
+                          }
+                      ]
+                  }
+              ]
           }
 
           request = urllib.request.Request(
@@ -214,12 +222,19 @@ jobs:
               headers={
                   "Content-Type": "application/json",
                   "User-Agent": "GI-Macro-Manager-Release-Notifier/1.0"
-              }
+              },
+              method="POST"
           )
 
-          with urllib.request.urlopen(request, timeout=20) as response:
-              if response.status not in (200, 204):
-                  raise RuntimeError(
-                      f"Discord returned HTTP {response.status}"
-                  )
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  status = response.status
+          except urllib.error.HTTPError as error:
+              details = error.read().decode("utf-8", errors="replace")
+              raise RuntimeError(
+                  f"Discord returned HTTP {error.code}: {details}"
+              ) from error
+
+          if status not in (200, 204):
+              raise RuntimeError(f"Discord returned HTTP {status}")
           PY
