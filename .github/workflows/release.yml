@@ -132,3 +132,94 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub Release publishing failed."
           }
+    notify-discord:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Read release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json name,url,body > release.json
+
+      - name: Send Discord webhook
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          webhook_url = os.environ.get("DISCORD_WEBHOOK")
+          if not webhook_url:
+              raise RuntimeError("DISCORD_WEBHOOK repository secret is missing.")
+
+          with open("release.json", encoding="utf-8") as file:
+              release = json.load(file)
+
+          rel_name = release.get("name") or os.environ["RELEASE_TAG"]
+          rel_url = release.get("url") or ""
+          rel_body = (release.get("body") or "No details provided.")[:4000]
+
+          payload = {
+              "content": (
+                  "<@&1533499842293137608> 🚀 "
+                  "**GI Macro Manager — New Release Available!**\n\n"
+                  "We are excited to announce the latest version of "
+                  "**GI Macro Manager**!"
+              ),
+              "allowed_mentions": {
+                  "roles": ["1533499842293137608"]
+              },
+              "embeds": [{
+                  "title": f"📌 {rel_name}",
+                  "url": rel_url,
+                  "description": rel_body,
+                  "color": 3066993,
+                  "fields": [
+                      {
+                          "name": "📥 Download & Setup",
+                          "value": (
+                              f"• [Official Download Link]({rel_url})\n"
+                              "• Installation steps available in "
+                              "<#1532699557195157594>"
+                          ),
+                          "inline": False
+                      },
+                      {
+                          "name": "💬 Support & Feedback",
+                          "value": (
+                              "Experiencing issues? Report them in "
+                              "<#1532700234394898472> or share ideas in "
+                              "<#1532700380020871218>!"
+                          ),
+                          "inline": False
+                      }
+                  ]
+              }]
+          }
+
+          request = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "GI-Macro-Manager-Release-Notifier/1.0"
+              }
+          )
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+              if response.status not in (200, 204):
+                  raise RuntimeError(
+                      f"Discord returned HTTP {response.status}"
+                  )
+          PY
