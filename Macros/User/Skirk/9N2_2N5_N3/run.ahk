@@ -6,7 +6,7 @@
 #Persistent
 SetBatchLines, -1
 SetWorkingDir, %A_ScriptDir%
-__MM_OriginalTrigger_user_Skirk_9N2_2N5_N3_20260802105615 := "j"
+__MM_OriginalTrigger_Skirk_9N2_2N5_N3 := "j"
 
 ; Macro Manager export
 ; Character: Skirk
@@ -83,13 +83,13 @@ global AbortRequested := false
 
 DllCall("winmm\timeBeginPeriod", "UInt", 1)
 OnExit, CleanupTimer
-SetTimer, __MM_InvokeImported_user_Skirk_9N2_2N5_N3_20260802105615, -1
+SetTimer, __MM_InvokeImported_Skirk_9N2_2N5_N3, -1
 return
 
 ; Keep the original game's window restriction.
 #IfWinActive ahk_exe GenshinImpact.exe
 
-__MM_ImportedEntry_user_Skirk_9N2_2N5_N3_20260802105615:
+__MM_ImportedEntry_Skirk_9N2_2N5_N3:
     ; Ignore keyboard auto-repeat and extra down events until physical release.
     if (TriggerLatched)
         return
@@ -109,12 +109,12 @@ __MM_ImportedEntry_user_Skirk_9N2_2N5_N3_20260802105615:
     {
         ReleaseAllInputs()
         MacroRunning := false
-        if !__MM_GetKeyState_user_Skirk_9N2_2N5_N3_20260802105615(TriggerKey, "P")
+        if !__MM_GetKeyState_Skirk_9N2_2N5_N3(TriggerKey, "P")
             TriggerLatched := false
     }
 return
 
-__MM_ImportedEntryUp_user_Skirk_9N2_2N5_N3_20260802105615:
+__MM_ImportedEntryUp_Skirk_9N2_2N5_N3:
     AbortRequested := true
     TriggerLatched := false
     ReleaseAllInputs()
@@ -297,7 +297,7 @@ PreciseSleepHeld(delayMs)
     if (!freq)
         DllCall("QueryPerformanceFrequency", "Int64*", freq)
 
-    if (AbortRequested || !__MM_GetKeyState_user_Skirk_9N2_2N5_N3_20260802105615(TriggerKey, "P"))
+    if (AbortRequested || !__MM_GetKeyState_Skirk_9N2_2N5_N3(TriggerKey, "P"))
         return false
 
     DllCall("QueryPerformanceCounter", "Int64*", start)
@@ -305,7 +305,7 @@ PreciseSleepHeld(delayMs)
 
     Loop
     {
-        if (AbortRequested || !__MM_GetKeyState_user_Skirk_9N2_2N5_N3_20260802105615(TriggerKey, "P"))
+        if (AbortRequested || !__MM_GetKeyState_Skirk_9N2_2N5_N3(TriggerKey, "P"))
             return false
 
         DllCall("QueryPerformanceCounter", "Int64*", now)
@@ -322,7 +322,7 @@ PreciseSleepHeld(delayMs)
 
     Loop
     {
-        if (AbortRequested || !__MM_GetKeyState_user_Skirk_9N2_2N5_N3_20260802105615(TriggerKey, "P"))
+        if (AbortRequested || !__MM_GetKeyState_Skirk_9N2_2N5_N3(TriggerKey, "P"))
             return false
 
         DllCall("QueryPerformanceCounter", "Int64*", now)
@@ -382,7 +382,7 @@ return
 
 
 
-__MM_CanonicalKey_user_Skirk_9N2_2N5_N3_20260802105615(keyName) {
+__MM_CanonicalKey_Skirk_9N2_2N5_N3(keyName) {
     keyName := Trim(keyName)
     keyName := RegExReplace(keyName, "i)\s+Up$")
     keyName := RegExReplace(keyName, "^[~*$]+")
@@ -391,14 +391,14 @@ __MM_CanonicalKey_user_Skirk_9N2_2N5_N3_20260802105615(keyName) {
     return keyName
 }
 
-__MM_GetKeyState_user_Skirk_9N2_2N5_N3_20260802105615(keyName, mode := "") {
-    global __MM_OriginalTrigger_user_Skirk_9N2_2N5_N3_20260802105615
-    canonicalKey := __MM_CanonicalKey_user_Skirk_9N2_2N5_N3_20260802105615(keyName)
-    if (canonicalKey = __MM_OriginalTrigger_user_Skirk_9N2_2N5_N3_20260802105615 && (mode = "" || mode = "P"))
+__MM_GetKeyState_Skirk_9N2_2N5_N3(keyName, mode := "") {
+    global __MM_OriginalTrigger_Skirk_9N2_2N5_N3
+    canonicalKey := __MM_CanonicalKey_Skirk_9N2_2N5_N3(keyName)
+    if (canonicalKey = __MM_OriginalTrigger_Skirk_9N2_2N5_N3 && (mode = "" || mode = "P"))
         return true
     return GetKeyState(keyName, mode)
 }
 
-__MM_InvokeImported_user_Skirk_9N2_2N5_N3_20260802105615:
-Gosub, __MM_ImportedEntry_user_Skirk_9N2_2N5_N3_20260802105615
+__MM_InvokeImported_Skirk_9N2_2N5_N3:
+Gosub, __MM_ImportedEntry_Skirk_9N2_2N5_N3
 return
