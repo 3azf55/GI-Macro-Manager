@@ -2,7 +2,7 @@
 
 A Windows macro manager built with **AutoHotkey v1**, **C# WinForms**, and **WebView2**.
 
-GI Macro Manager provides a modern interface for organizing, importing, running, exporting, deleting, and reordering macros. Character and macro definitions are loaded dynamically from the project catalog, so the engine does not depend on hard-coded character or combo names.
+GI Macro Manager provides a modern interface for organizing, importing, running, exporting, and deleting macros.
 
 ## Features
 
@@ -18,7 +18,6 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - Skip Dialogs mode
 - Optional game executable shortcut from the dashboard
 - System tray controls
-- Built-in Discord community link
 
 ## Requirements
 
@@ -82,10 +81,6 @@ dist\UMM.Engine.ahk
 2. Select a macro.
 3. Hold the configured trigger key to run it.
 4. Release the trigger to stop it.
-
-### Reorder macros
-
-Press and hold a macro card for about half a second, drag it to the desired position, and release it. The new order is saved in `Macros/registry.ini`.
 
 ### Import a macro
 
