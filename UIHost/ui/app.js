@@ -19,6 +19,8 @@ let updateState = {
   message: "Check GitHub for new releases.",
   currentVersion: "",
   latestVersion: "",
+  releaseName: "",
+  releaseNotes: "",
   releaseUrl: releasesUrl,
   canInstall: false,
   progress: null
@@ -52,6 +54,7 @@ const translations = {
   checkUpdates: "Check for updates",
   installUpdate: "Download & install",
   viewRelease: "View release",
+  releaseNotes: "Release notes",
   versionLabel: "Version",
   builtLabel: "Built",
   captureHotkey: "CAPTURE HOTKEY",
@@ -906,6 +909,9 @@ function renderUpdateStatus() {
   const viewButton = $("#viewReleaseButton");
   const progressTrack = $("#updateProgress");
   const progressBar = $("#updateProgressBar");
+  const releaseNotes = $("#updateReleaseNotes");
+  const releaseNotesSummary = $("#updateReleaseNotesSummary");
+  const releaseNotesText = $("#updateReleaseNotesText");
 
   if (!statusText || !checkButton || !installButton || !viewButton) return;
 
@@ -929,6 +935,23 @@ function renderUpdateStatus() {
     !releaseUrl || updateState.status === "idle" || updateState.status === "checking"
   );
   viewButton.disabled = busy && updateState.status !== "downloading";
+
+  const notes = String(updateState.releaseNotes || "").trim();
+  const releaseName = String(updateState.releaseName || "").trim();
+  const showNotes = Boolean(notes) && ["available", "current", "downloading", "installing"].includes(updateState.status);
+  if (releaseNotes && releaseNotesText) {
+    releaseNotes.classList.toggle("hidden", !showNotes);
+    releaseNotes.setAttribute("aria-hidden", showNotes ? "false" : "true");
+    if (releaseNotesSummary) {
+      releaseNotesSummary.textContent = releaseName
+        ? `${t("releaseNotes")} — ${releaseName}`
+        : t("releaseNotes");
+    }
+    releaseNotesText.textContent = showNotes
+      ? (notes.length > 1200 ? `${notes.slice(0, 1200).trimEnd()}…` : notes)
+      : "";
+    if (!showNotes) releaseNotes.open = false;
+  }
 
   const hasProgress = Number.isFinite(updateState.progress) &&
     ["downloading", "installing"].includes(updateState.status);

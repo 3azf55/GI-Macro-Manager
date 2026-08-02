@@ -70,7 +70,7 @@ global AssetsDir := ""
 global IconDir := ""
 global PortraitDir := ""
 global SoundDir := ""
-global AppVersion := "v1.6.5"
+global AppVersion := "v1.6.6"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -3310,28 +3310,21 @@ SetTrayIconByCharacter() {
 
 LoadHotkeySettings() {
     global ConfigFile
-    IniRead, SavedTrigger, %ConfigFile%, Settings, TriggerKey, XButton2
-    IniRead, SavedComboToggle, %ConfigFile%, Settings, ComboToggleKey, F10
-    IniRead, SavedCharacterToggle, %ConfigFile%, Settings, CharacterToggleKey, F9
-    IniRead, SavedModeToggle, %ConfigFile%, Settings, ModeToggleKey, F8
 
-    if (SavedTrigger = "" || SavedTrigger = "ERROR")
-        SavedTrigger := "XButton2"
-    if (SavedComboToggle = "" || SavedComboToggle = "ERROR")
-        SavedComboToggle := "F10"
-    if (SavedCharacterToggle = "" || SavedCharacterToggle = "ERROR")
-        SavedCharacterToggle := "F9"
-    if (SavedModeToggle = "" || SavedModeToggle = "ERROR")
-        SavedModeToggle := "F8"
+    IniRead, savedTrigger, %ConfigFile%, Settings, TriggerKey, XButton2
+    IniRead, savedComboToggle, %ConfigFile%, Settings, ComboToggleKey, F10
+    IniRead, savedCharacterToggle, %ConfigFile%, Settings, CharacterToggleKey, F9
+    IniRead, savedModeToggle, %ConfigFile%, Settings, ModeToggleKey, F8
 
-    if (!SetTriggerHotkey(SavedTrigger, false))
-        SetTriggerHotkey("XButton2", false)
-    if (!SetComboToggleHotkey(SavedComboToggle, false))
-        SetComboToggleHotkey("F10", false)
-    if (!SetCharacterToggleHotkey(SavedCharacterToggle, false))
-        SetCharacterToggleHotkey("F9", false)
-    if (!SetModeToggleHotkey(SavedModeToggle, false))
-        SetModeToggleHotkey("F8", false)
+    resolved := ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle)
+
+    if (!ApplyHotkeyConfiguration(resolved, true, false)) {
+        defaults := GetDefaultHotkeyConfiguration()
+        if (!ApplyHotkeyConfiguration(defaults, true, false)) {
+            MsgBox, 16, Macro Manager, The application hotkeys could not be registered.
+            ExitApp
+        }
+    }
 }
 
 SetupTrayMenu() {
@@ -3497,12 +3490,16 @@ SetMode(modeName, showShortcutFeedback := false) {
 
 
 
-SetTriggerHotkey(newKey, save := true) {
+SetTriggerHotkey(newKey, save := true, validatePeers := true) {
     global TriggerKey, TriggerDownHotkey, TriggerUpHotkey, ConfigFile
 
     newKey := Trim(newKey)
-    if (!IsAllowedBasicHotkey(newKey))
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "Trigger"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
         return false
+    }
 
     oldDown := TriggerDownHotkey
     oldUp := TriggerUpHotkey
@@ -3540,12 +3537,16 @@ SetTriggerHotkey(newKey, save := true) {
     return true
 }
 
-SetComboToggleHotkey(newKey, save := true) {
+SetComboToggleHotkey(newKey, save := true, validatePeers := true) {
     global ComboToggleKey, ComboToggleHotkey, ConfigFile
 
     newKey := Trim(newKey)
-    if (!IsAllowedBasicHotkey(newKey))
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "ComboToggle"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
         return false
+    }
 
     oldHk := ComboToggleHotkey
     oldKey := ComboToggleKey
@@ -3574,12 +3575,16 @@ SetComboToggleHotkey(newKey, save := true) {
     return true
 }
 
-SetCharacterToggleHotkey(newKey, save := true) {
+SetCharacterToggleHotkey(newKey, save := true, validatePeers := true) {
     global CharacterToggleKey, CharacterToggleHotkey, ConfigFile
 
     newKey := Trim(newKey)
-    if (!IsAllowedBasicHotkey(newKey))
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "CharacterToggle"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
         return false
+    }
 
     oldHk := CharacterToggleHotkey
     oldKey := CharacterToggleKey
@@ -3608,12 +3613,16 @@ SetCharacterToggleHotkey(newKey, save := true) {
     return true
 }
 
-SetModeToggleHotkey(newKey, save := true) {
+SetModeToggleHotkey(newKey, save := true, validatePeers := true) {
     global ModeToggleKey, ModeToggleHotkey, ConfigFile
 
     newKey := Trim(newKey)
-    if (!IsAllowedBasicHotkey(newKey))
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "ModeToggle"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
         return false
+    }
 
     oldHk := ModeToggleHotkey
     oldKey := ModeToggleKey
@@ -3642,13 +3651,27 @@ SetModeToggleHotkey(newKey, save := true) {
     return true
 }
 
+GetDefaultHotkeyConfiguration() {
+    return {Trigger: "XButton2", ComboToggle: "F10", CharacterToggle: "F9", ModeToggle: "F8"}
+}
+
+NormalizeHotkeyName(keyName) {
+    keyName := Trim(keyName)
+    StringLower, lowerKey, keyName
+    return lowerKey
+}
+
 IsAllowedBasicHotkey(keyName) {
     keyName := Trim(keyName)
-    if (keyName = "")
+    if (keyName = "" || keyName = "ERROR")
         return false
 
-    StringLower, lowerKey, keyName
-    if (lowerKey = "lbutton" || lowerKey = "rbutton" || lowerKey = "q" || lowerKey = "f" || lowerKey = "e" || lowerKey = "w" || lowerKey = "a" || lowerKey = "d" || lowerKey = "shift" || lowerKey = "lshift" || lowerKey = "rshift" || lowerKey = "wheelup" || lowerKey = "wheeldown" || lowerKey = "wheelleft" || lowerKey = "wheelright")
+    lowerKey := NormalizeHotkeyName(keyName)
+
+    ; These keys are used directly by gameplay or macro input and must not be
+    ; captured globally by an application shortcut. Keep WASD complete.
+    reserved := "|lbutton|rbutton|q|w|e|a|s|d|f|shift|lshift|rshift|wheelup|wheeldown|wheelleft|wheelright|"
+    if InStr(reserved, "|" . lowerKey . "|")
         return false
 
     return true
@@ -3657,14 +3680,17 @@ IsAllowedBasicHotkey(keyName) {
 IsAllowedKeyForTarget(keyName, target) {
     global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
 
+    if (target != "Trigger" && target != "ComboToggle" && target != "CharacterToggle" && target != "ModeToggle")
+        return false
+
     if (!IsAllowedBasicHotkey(keyName))
         return false
 
-    StringLower, lowerKey, keyName
-    StringLower, lowerTrigger, TriggerKey
-    StringLower, lowerCombo, ComboToggleKey
-    StringLower, lowerCharacter, CharacterToggleKey
-    StringLower, lowerMode, ModeToggleKey
+    lowerKey := NormalizeHotkeyName(keyName)
+    lowerTrigger := NormalizeHotkeyName(TriggerKey)
+    lowerCombo := NormalizeHotkeyName(ComboToggleKey)
+    lowerCharacter := NormalizeHotkeyName(CharacterToggleKey)
+    lowerMode := NormalizeHotkeyName(ModeToggleKey)
 
     if (target != "Trigger" && lowerKey = lowerTrigger)
         return false
@@ -3676,6 +3702,141 @@ IsAllowedKeyForTarget(keyName, target) {
         return false
 
     return true
+}
+
+IsValidHotkeyConfiguration(keys) {
+    if (!IsObject(keys))
+        return false
+
+    used := {}
+    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle"]
+
+    for index, target in order {
+        keyName := keys[target]
+        if (!IsAllowedBasicHotkey(keyName))
+            return false
+
+        normalized := NormalizeHotkeyName(keyName)
+        if (used.HasKey(normalized))
+            return false
+
+        used[normalized] := true
+    }
+
+    return true
+}
+
+FindAvailableFallbackHotkey(preferredKey, used) {
+    candidates := [preferredKey, "XButton2", "XButton1", "F10", "F9", "F8", "F7", "F6", "F5", "F4", "F3", "F2", "F1"]
+
+    for index, candidate in candidates {
+        normalized := NormalizeHotkeyName(candidate)
+        if (IsAllowedBasicHotkey(candidate) && !used.HasKey(normalized))
+            return candidate
+    }
+
+    return ""
+}
+
+ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle) {
+    defaults := GetDefaultHotkeyConfiguration()
+    keys := {Trigger: Trim(savedTrigger), ComboToggle: Trim(savedComboToggle), CharacterToggle: Trim(savedCharacterToggle), ModeToggle: Trim(savedModeToggle)}
+    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle"]
+    counts := {}
+
+    ; Replace individually invalid values before duplicate analysis.
+    for index, target in order {
+        if (!IsAllowedBasicHotkey(keys[target]))
+            keys[target] := defaults[target]
+
+        normalized := NormalizeHotkeyName(keys[target])
+        counts[normalized] := counts.HasKey(normalized) ? counts[normalized] + 1 : 1
+    }
+
+    ; A duplicated saved value is ambiguous. Reset every role in that
+    ; collision to its own default instead of silently allowing one to win.
+    for index, target in order {
+        normalized := NormalizeHotkeyName(keys[target])
+        if (counts[normalized] > 1)
+            keys[target] := defaults[target]
+    }
+
+    ; Defaults can still collide with a valid custom assignment. Resolve any
+    ; remaining collision deterministically from a safe fallback pool.
+    used := {}
+    for index, target in order {
+        candidate := keys[target]
+        normalized := NormalizeHotkeyName(candidate)
+
+        if (!IsAllowedBasicHotkey(candidate) || used.HasKey(normalized))
+            candidate := FindAvailableFallbackHotkey(defaults[target], used)
+
+        if (candidate = "")
+            return defaults
+
+        keys[target] := candidate
+        used[NormalizeHotkeyName(candidate)] := true
+    }
+
+    return keys
+}
+
+SaveHotkeyConfiguration(keys) {
+    global ConfigFile
+
+    IniWrite, % keys.Trigger, %ConfigFile%, Settings, TriggerKey
+    IniWrite, % keys.ComboToggle, %ConfigFile%, Settings, ComboToggleKey
+    IniWrite, % keys.CharacterToggle, %ConfigFile%, Settings, CharacterToggleKey
+    IniWrite, % keys.ModeToggle, %ConfigFile%, Settings, ModeToggleKey
+}
+
+ClearManagedHotkeyState() {
+    global TriggerKey, TriggerDownHotkey, TriggerUpHotkey
+    global ComboToggleKey, ComboToggleHotkey
+    global CharacterToggleKey, CharacterToggleHotkey
+    global ModeToggleKey, ModeToggleHotkey
+
+    TriggerKey := ""
+    TriggerDownHotkey := ""
+    TriggerUpHotkey := ""
+    ComboToggleKey := ""
+    ComboToggleHotkey := ""
+    CharacterToggleKey := ""
+    CharacterToggleHotkey := ""
+    ModeToggleKey := ""
+    ModeToggleHotkey := ""
+}
+
+ApplyHotkeyConfiguration(keys, save := true, restoreOnFailure := true) {
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+
+    if (!IsValidHotkeyConfiguration(keys))
+        return false
+
+    previous := {Trigger: TriggerKey, ComboToggle: ComboToggleKey, CharacterToggle: CharacterToggleKey, ModeToggle: ModeToggleKey}
+
+    DisableAllManagedHotkeys()
+    ClearManagedHotkeyState()
+
+    success := SetTriggerHotkey(keys.Trigger, false, false) && SetComboToggleHotkey(keys.ComboToggle, false, false) && SetCharacterToggleHotkey(keys.CharacterToggle, false, false) && SetModeToggleHotkey(keys.ModeToggle, false, false)
+
+    if (success) {
+        if (save)
+            SaveHotkeyConfiguration(keys)
+        return true
+    }
+
+    DisableAllManagedHotkeys()
+    ClearManagedHotkeyState()
+
+    if (restoreOnFailure && IsValidHotkeyConfiguration(previous)) {
+        SetTriggerHotkey(previous.Trigger, false, false)
+        SetComboToggleHotkey(previous.ComboToggle, false, false)
+        SetCharacterToggleHotkey(previous.CharacterToggle, false, false)
+        SetModeToggleHotkey(previous.ModeToggle, false, false)
+    }
+
+    return false
 }
 
 DisableAllManagedHotkeys() {
@@ -3707,13 +3868,15 @@ ResetHotkeysToDefault() {
         return
     }
 
-    DisableAllManagedHotkeys()
-    SetTriggerHotkey("XButton2", true)
-    SetComboToggleHotkey("F10", true)
-    SetCharacterToggleHotkey("F9", true)
-    SetModeToggleHotkey("F8", true)
+    defaults := GetDefaultHotkeyConfiguration()
+    if (!ApplyHotkeyConfiguration(defaults, true, true)) {
+        ShowModeTooltip("Hotkeys could not be reset", 1500)
+        return
+    }
+
     SetupTrayMenu()
     UpdateTrayText()
+    WebUI_SendState()
     ShowModeTooltip("Hotkeys reset to default", 1500)
 }
 
@@ -3890,30 +4053,6 @@ F_Up() {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-ShouldContinue() {
-    global StopRequested, TriggerKey
-    return (!StopRequested && GetKeyState(TriggerKey, "P"))
-}
-
 QpcMs() {
     static freq := 0
     local counter
@@ -3923,131 +4062,6 @@ QpcMs() {
 
     DllCall("QueryPerformanceCounter", "Int64*", counter)
     return (counter * 1000.0 / freq)
-}
-
-PreciseSleep(ms) {
-    return WaitUntil(QpcMs() + ms)
-}
-
-WaitUntil(targetMs) {
-    local remaining, sleepMs
-
-    while (ShouldContinue()) {
-        remaining := targetMs - QpcMs()
-        if (remaining <= 0)
-            return true
-
-        if (remaining > 8) {
-            sleepMs := Floor(remaining - 3)
-            if (sleepMs > 5)
-                sleepMs := 5
-            DllCall("Sleep", "UInt", sleepMs)
-        } else if (remaining > 1.4) {
-            DllCall("Sleep", "UInt", 1)
-        } else {
-            DllCall("SwitchToThread")
-        }
-    }
-
-    return false
-}
-
-
-Q_Down() {
-    global QState
-    DllCall("keybd_event", "UChar", 0x51, "UChar", 0x10, "UInt", 0, "UPtr", 0)
-    QState := true
-}
-
-Q_Up() {
-    global QState
-    DllCall("keybd_event", "UChar", 0x51, "UChar", 0x10, "UInt", 2, "UPtr", 0)
-    QState := false
-}
-
-L_Down() {
-    global LState
-    DllCall("mouse_event", "UInt", 0x0002, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
-    LState := true
-}
-
-L_Up() {
-    global LState
-    DllCall("mouse_event", "UInt", 0x0004, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
-    LState := false
-}
-
-R_Down() {
-    global RState
-    DllCall("mouse_event", "UInt", 0x0008, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
-    RState := true
-}
-
-R_Up() {
-    global RState
-    DllCall("mouse_event", "UInt", 0x0010, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
-    RState := false
-}
-
-E_Down() {
-    global EState
-    DllCall("keybd_event", "UChar", 0x45, "UChar", 0x12, "UInt", 0, "UPtr", 0)
-    EState := true
-}
-
-E_Up() {
-    global EState
-    DllCall("keybd_event", "UChar", 0x45, "UChar", 0x12, "UInt", 2, "UPtr", 0)
-    EState := false
-}
-
-W_Down() {
-    global WState
-    DllCall("keybd_event", "UChar", 0x57, "UChar", 0x11, "UInt", 0, "UPtr", 0)
-    WState := true
-}
-
-W_Up() {
-    global WState
-    DllCall("keybd_event", "UChar", 0x57, "UChar", 0x11, "UInt", 2, "UPtr", 0)
-    WState := false
-}
-
-Shift_Down() {
-    global ShiftState
-    DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 0, "UPtr", 0)
-    ShiftState := true
-}
-
-Shift_Up() {
-    global ShiftState
-    DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 2, "UPtr", 0)
-    ShiftState := false
-}
-
-
-A_Down() {
-    global AState
-    DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 0, "UPtr", 0)
-    AState := true
-}
-
-A_Up() {
-    global AState
-    DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 2, "UPtr", 0)
-    AState := false
-}
-
-D_Down() {
-    global DState
-    DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 0, "UPtr", 0)
-    DState := true
-}
-
-D_Up() {
-    global DState
-    DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 2, "UPtr", 0)
-    DState := false
 }
 
 

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, for example v1.6.5
+        description: Existing release tag to build, for example v1.6.6
         required: true
         type: string
 
@@ -33,6 +33,10 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
+
+      - name: Validate source metadata and JavaScript
+        shell: pwsh
+        run: .\scripts\validate-source.ps1 -RequireNode
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v6.0.0
@@ -67,6 +71,9 @@ jobs:
           if ($buildInfo.version -ne $tag) {
             throw "Web UI version $($buildInfo.version) does not match tag $tag."
           }
+          if ($null -ne $buildInfo.buildDate -and -not [string]::IsNullOrWhiteSpace([string]$buildInfo.buildDate)) {
+            throw "Source build-info.json must not contain a local build date."
+          }
 
       - name: Build runtime package
         shell: pwsh
@@ -81,7 +88,9 @@ jobs:
             '.\dist\ui\index.html',
             '.\dist\ui\app.js',
             '.\dist\Macros\registry.ini',
-            '.\dist\Assets\fonts\OFL.txt'
+            '.\dist\Assets\fonts\OFL.txt',
+            '.\dist\LICENSE',
+            '.\dist\docs\MACRO_CREDITS.md'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) {

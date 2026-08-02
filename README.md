@@ -2,24 +2,20 @@
 
 A Windows macro manager built with **AutoHotkey v1**, **C# WinForms**, and **WebView2**.
 
-GI Macro Manager provides a modern interface for organizing, importing, running, exporting, deleting, and reordering macros. Character and macro definitions are loaded dynamically from the project catalog rather than being hard-coded in the engine.
+GI Macro Manager provides a modern interface for organizing, importing, running, exporting, deleting, and reordering macro packages. Characters and macros are loaded dynamically from the catalog rather than being hard-coded into the engine.
 
 ## Features
 
 - Modern WebView2 interface with dark and light themes
 - Dynamic character and macro catalog
 - Separate AutoHotkey process for each running macro
-- Import support for AutoHotkey v1 scripts
-- Automatic detection of a script's first standard hotkey
-- Support for `RunMacro()` and auto-execute scripts
-- Stable package names and registry IDs for imported macros
-- Portable package manifests that preserve names, tooltips, and tags
+- AutoHotkey v1 import with hotkey, `RunMacro()`, and auto-execute detection
+- Stable package names for imported macros
 - Add, export, delete, and reorder macro packages
-- Configurable trigger and navigation hotkeys
-- Skip Dialogs mode
-- Optional game executable shortcut from the dashboard
-- System tray controls
-- GitHub release update checks with in-app download and installation
+- Configurable, conflict-checked application hotkeys
+- Skip Dialogs mode and optional game launcher
+- GitHub release checks with download and installation support
+- System tray controls and Discord community access
 
 ## Requirements
 
@@ -36,6 +32,7 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - .NET 8 SDK
 - AutoHotkey **v1.1 Unicode**
 - Microsoft Edge WebView2 Runtime
+- Node.js for source validation
 
 ## Download
 
@@ -47,88 +44,35 @@ After downloading a release:
 2. Make sure AutoHotkey v1.1 is installed.
 3. Run `UMM.Engine.ahk`.
 
-The engine starts the WebView2 interface automatically.
-
 ## Build from Source
-
-Clone the repository and run the build script from the project root:
 
 ```bat
 scripts\build-and-stage.cmd
 ```
 
-PowerShell can also be used directly:
-
-```powershell
-.\scripts\build-and-stage.ps1
-```
-
-The completed runtime package is created in:
-
-```text
-dist\
-```
-
-Start the built application with:
+The completed runtime package is created in `dist\`. Start it with:
 
 ```text
 dist\UMM.Engine.ahk
 ```
 
-## Using Macro Manager
+Validate the source before submitting changes:
 
-### Select and run a macro
-
-1. Choose a character.
-2. Select a macro.
-3. Hold the configured trigger key to run it.
-4. Release the trigger to stop it.
-
-### Reorder macros
-
-Press and hold a macro card, drag it to the desired position, and release it. The new order is saved in `Macros/registry.ini`.
-
-### Import a macro
-
-Use **Add Macro** from the selected character panel and choose an AutoHotkey v1 file.
-
-The importer supports:
-
-1. A standard hotkey detected in the script
-2. A `RunMacro()` function
-3. An auto-execute section
-
-Imported packages receive a stable folder and registry ID derived from the character and macro name. Timestamps are not used. A complete `manifest.ini` is written so the package can be moved between project trees without losing its display metadata.
-
-Scripts that depend on additional includes, DLLs, configuration files, images, or other assets must keep those dependencies available.
-
-### Check for updates
-
-The About page can check the latest stable GitHub Release. When a compatible runtime ZIP is available, Macro Manager can download it, preserve user settings and custom macro packages, install the update, and restart.
+```powershell
+.\scripts\validate-source.ps1 -RequireNode
+```
 
 ## Macro Packages
 
 Macro packages are stored under:
 
 ```text
-Macros\User\<Character>\<StablePackageName>\
+Macros\User\<Character>\<Macro>\
 ```
 
-A managed package contains:
+A typical package contains `manifest.ini` and `source.ahk`. Catalog information, script paths, tags, and display order are stored in `Macros\registry.ini`.
 
-```text
-manifest.ini
-source.ahk
-run.ahk
-```
-
-Catalog information, script paths, tags, and display order are stored in:
-
-```text
-Macros\registry.ini
-```
-
-A source-only folder is not registered automatically. Package recovery requires an explicit manifest. See [Macro Packages](docs/MACRO_PACKAGES.md) for the package format and import behavior.
+See [Macro Packages](docs/MACRO_PACKAGES.md) for the package format and import behavior.
 
 ## Project Structure
 
@@ -136,14 +80,7 @@ A source-only folder is not registered automatically. Package recovery requires 
 .
 ├── UMM.Engine.ahk
 ├── UIHost/
-│   ├── UMM.UI.csproj
-│   ├── MainForm.cs
-│   ├── UpdateService.cs
-│   └── ui/
 ├── Macros/
-│   ├── registry.ini
-│   ├── Runtime/
-│   └── User/
 ├── Assets/
 ├── scripts/
 └── docs/
@@ -157,17 +94,13 @@ Imported AutoHotkey files are executable scripts and run with the current Window
 
 Read the full [Security Policy](SECURITY.md).
 
-## Credits
-
-Macro timing credits are maintained in [Macro Credits](docs/MACRO_CREDITS.md).
-
 ## Contributing
 
-Contributions and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
+Contributions and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Pull requests are validated automatically by GitHub Actions.
 
-## Third-Party Licenses
+## Credits
 
-Open Sans is licensed under the SIL Open Font License 1.1. See [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+Macro timing references are listed in [Macro Timing Credits](docs/MACRO_CREDITS.md).
 
 ## Community
 
@@ -176,10 +109,6 @@ Open Sans is licensed under the SIL Open Font License 1.1. See [Third-Party Noti
 
 ## License
 
-The original source code of GI Macro Manager is licensed under the
-[MIT License](LICENSE).
+The original source code of GI Macro Manager is licensed under the [MIT License](LICENSE).
 
-Third-party fonts, libraries, images, sounds, macro timing references,
-and other external assets remain subject to their respective licenses
-and ownership. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-and [Macro Timing Credits](docs/MACRO_CREDITS.md).
+Third-party fonts, libraries, images, sounds, macro timing references, and other external assets remain subject to their respective licenses and ownership. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Macro Timing Credits](docs/MACRO_CREDITS.md).

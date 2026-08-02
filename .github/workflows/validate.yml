@@ -1,0 +1,45 @@
+name: Validate source
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Validate source metadata and JavaScript
+        shell: pwsh
+        run: .\scripts\validate-source.ps1 -RequireNode
+
+      - name: Restore UI dependencies
+        shell: pwsh
+        run: dotnet restore .\UIHost\UMM.UI.csproj --configfile .\NuGet.Config -r win-x64
+
+      - name: Build UI host
+        shell: pwsh
+        run: dotnet build .\UIHost\UMM.UI.csproj -c Release -r win-x64 --no-restore

@@ -8,7 +8,7 @@
 
 @font-face {
   font-family: "UMM Open Sans";
-  src: url("https://assets.umm/fonts/OpenSans-SemiBold.ttf") format("truetype");
+  src: url("https://assets.umm/fonts/OpenSans-Semibold.ttf") format("truetype");
   font-weight: 600 800;
   font-style: normal;
   font-display: swap;
@@ -860,6 +860,25 @@ select:disabled {
 .update-copy { min-width: 0; display: grid; gap: 5px; }
 .update-copy strong { font-size: 13px; }
 .update-copy small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.update-release-notes {
+  width: min(520px, 100%);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.update-release-notes summary {
+  width: max-content;
+  color: var(--text-soft);
+  cursor: pointer;
+  user-select: none;
+}
+.update-release-notes p {
+  max-height: 96px;
+  margin: 7px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .update-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .compact-button { min-height: 36px; padding: 0 13px; border-radius: 12px; font-size: 10px; white-space: nowrap; }
 .update-progress {

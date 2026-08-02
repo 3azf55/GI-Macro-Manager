@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>UMM.UI</AssemblyName>
     <RootNamespace>UMM.UI</RootNamespace>
-    <Version>1.6.5</Version>
+    <Version>1.6.6</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- Keep the first build framework-dependent and multi-file.

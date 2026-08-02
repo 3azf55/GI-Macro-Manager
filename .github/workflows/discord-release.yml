@@ -4,9 +4,12 @@ on:
   release:
     types: [published]
 
+permissions: {}
+
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Send Discord Webhook
         env:
@@ -21,10 +24,11 @@ jobs:
           webhook_url = os.environ["DISCORD_WEBHOOK"]
           rel_name = os.environ.get("RELEASE_NAME") or "New Release"
           rel_url = os.environ.get("RELEASE_URL") or ""
-          rel_body = os.environ.get("RELEASE_BODY") or "No details provided."
+          rel_body = (os.environ.get("RELEASE_BODY") or "No details provided.")[:4000]
 
           payload = {
               "content": "<@&1533499842293137608> 🚀 **GI Macro Manager — New Release Available!**\n\nWe are excited to announce the latest version of **GI Macro Manager**!",
+              "allowed_mentions": {"roles": ["1533499842293137608"]},
               "embeds": [
                   {
                       "title": f"📌 {rel_name}",
@@ -50,7 +54,9 @@ jobs:
           req = urllib.request.Request(
               webhook_url,
               data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+              headers={"Content-Type": "application/json", "User-Agent": "GI-Macro-Manager-Release-Notifier/1.0"}
           )
-          urllib.request.urlopen(req)
+          with urllib.request.urlopen(req, timeout=20) as response:
+              if response.status not in (200, 204):
+                  raise RuntimeError(f"Discord returned HTTP {response.status}")
           '

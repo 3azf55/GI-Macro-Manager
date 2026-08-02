@@ -73,3 +73,7 @@ and runs input cleanup.
 7. Replace runtime files and restart `UMM.Engine.ahk`.
 
 The WebView2 About page communicates directly with the C# host for update actions; update commands are not forwarded to the AutoHotkey engine.
+
+## Source validation
+
+`scripts/validate-source.ps1` validates version metadata, registry encoding and paths, exact asset filename casing, stable macro package names, duplicate AHK functions, and JavaScript syntax. GitHub runs it for pull requests and pushes to `main`.

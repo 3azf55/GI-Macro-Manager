@@ -220,13 +220,17 @@
               <path d="M20 7v5h-5M4 17v-5h5M18.2 9A7 7 0 0 0 6.6 6.6L4 9M5.8 15A7 7 0 0 0 17.4 17.4L20 15"/>
             </svg>
           </span>
-          <span class="update-copy">
+          <div class="update-copy">
             <strong id="updateCardTitle" data-i18n="updatesTitle">Updates</strong>
             <small id="updateStatusText" data-i18n="updatesIdle">Check GitHub for new releases.</small>
+            <details class="update-release-notes hidden" id="updateReleaseNotes">
+              <summary id="updateReleaseNotesSummary">Release notes</summary>
+              <p id="updateReleaseNotesText"></p>
+            </details>
             <span class="update-progress hidden" id="updateProgress" aria-hidden="true">
               <span id="updateProgressBar"></span>
             </span>
-          </span>
+          </div>
           <span class="update-actions">
             <button class="secondary-button compact-button hidden" id="viewReleaseButton" type="button" data-i18n="viewRelease">View release</button>
             <button class="secondary-button compact-button" id="checkUpdateButton" type="button" data-i18n="checkUpdates">Check for updates</button>

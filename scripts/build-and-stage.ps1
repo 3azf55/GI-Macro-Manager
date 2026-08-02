@@ -72,7 +72,12 @@ try {
     Copy-Item (Join-Path $PackageRoot "README.md") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "CHANGELOG.md") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "SECURITY.md") $PublishTemp -Force
+    Copy-Item (Join-Path $PackageRoot "LICENSE") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "THIRD_PARTY_NOTICES.md") $PublishTemp -Force
+
+    $DocsOutput = Join-Path $PublishTemp "docs"
+    New-Item $DocsOutput -ItemType Directory -Force | Out-Null
+    Copy-Item (Join-Path $PackageRoot "docs\MACRO_CREDITS.md") $DocsOutput -Force
 
     $EngineFile = Join-Path $PackageRoot "UMM.Engine.ahk"
     $EngineText = Get-Content $EngineFile -Raw
@@ -131,12 +136,16 @@ try {
     $FinalEngine = Join-Path $Dist "UMM.Engine.ahk"
     $FinalRegistry = Join-Path $Dist "Macros\registry.ini"
     $FinalUi = Join-Path $Dist "ui\index.html"
+    $FinalLicense = Join-Path $Dist "LICENSE"
+    $FinalCredits = Join-Path $Dist "docs\MACRO_CREDITS.md"
 
     $RequiredOutputs = @(
         $FinalExe,
         $FinalEngine,
         $FinalRegistry,
-        $FinalUi
+        $FinalUi,
+        $FinalLicense,
+        $FinalCredits
     )
 
     foreach ($RequiredOutput in $RequiredOutputs) {

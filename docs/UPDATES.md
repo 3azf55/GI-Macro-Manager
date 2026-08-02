@@ -30,28 +30,28 @@ The repository includes:
 .github\workflows\release.yml
 ```
 
-Pushing a tag such as `v1.6.5` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
+Pushing a tag such as `v1.6.6` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
 
 Before creating the tag, make sure these versions match:
 
 ```text
-UMM.Engine.ahk                 global AppVersion := "v1.6.5"
-UIHost\UMM.UI.csproj           <Version>1.6.5</Version>
-UIHost\ui\build-info.json      "version": "v1.6.5"
+UMM.Engine.ahk                 global AppVersion := "v1.6.6"
+UIHost\UMM.UI.csproj           <Version>1.6.6</Version>
+UIHost\ui\build-info.json      "version": "v1.6.6", "buildDate": null
 ```
 
 Then run:
 
 ```powershell
 git add .
-git commit -m "Release v1.6.5"
+git commit -m "Release v1.6.6"
 git push
 
-git tag v1.6.5
-git push origin v1.6.5
+git tag v1.6.6
+git push origin v1.6.6
 ```
 
-The workflow validates the tag against the engine and UI versions before building.
+The workflow runs the same source validator used by pull requests, then validates the tag against the engine and UI versions before building. The source `build-info.json` is a version template; the build script writes the actual date only into `dist`.
 
 ## Update installation behavior
 
