@@ -1,0 +1,54 @@
+# Repository Inventory
+
+Total tracked-source files before Git: 50
+
+- `.editorconfig`
+- `.gitattributes`
+- `.github/ISSUE_TEMPLATE/bug_report.md`
+- `.github/ISSUE_TEMPLATE/feature_request.md`
+- `.gitignore`
+- `Assets/fonts/README.txt`
+- `Assets/icons/README.txt`
+- `Assets/portraits/README.txt`
+- `Assets/sounds/README.txt`
+- `CHANGELOG.md`
+- `CONTRIBUTING.md`
+- `Macros/Runtime/MacroRuntime.ahk`
+- `Macros/User/Arlecchino/Overload_N2W/manifest.ini`
+- `Macros/User/Arlecchino/Overload_N2W/source.ahk`
+- `Macros/User/Hu_Tao/10N2CD/manifest.ini`
+- `Macros/User/Hu_Tao/10N2CD/source.ahk`
+- `Macros/User/Hu_Tao/11N2CD/manifest.ini`
+- `Macros/User/Hu_Tao/11N2CD/source.ahk`
+- `Macros/User/Mavuika/Melt/manifest.ini`
+- `Macros/User/Mavuika/Melt/source.ahk`
+- `Macros/User/Mavuika/Overload/manifest.ini`
+- `Macros/User/Mavuika/Overload/source.ahk`
+- `Macros/User/Mavuika/Vape/manifest.ini`
+- `Macros/User/Mavuika/Vape/source.ahk`
+- `Macros/User/Mavuika/hybird/manifest.ini`
+- `Macros/User/Mavuika/hybird/source.ahk`
+- `Macros/User/README.txt`
+- `Macros/User/Skirk/12N2_4N3/manifest.ini`
+- `Macros/User/Skirk/12N2_4N3/source.ahk`
+- `Macros/User/Skirk/14N_2N3_N4/manifest.ini`
+- `Macros/User/Skirk/14N_2N3_N4/source.ahk`
+- `Macros/registry.ini`
+- `NuGet.Config`
+- `README.md`
+- `SECURITY.md`
+- `UIHost/BridgeProtocol.cs`
+- `UIHost/MainForm.cs`
+- `UIHost/Program.cs`
+- `UIHost/UMM.UI.csproj`
+- `UIHost/app.manifest`
+- `UIHost/ui/app.js`
+- `UIHost/ui/build-info.json`
+- `UIHost/ui/index.html`
+- `UIHost/ui/styles.css`
+- `UMM.Engine.ahk`
+- `docs/ARCHITECTURE.md`
+- `docs/MACRO_PACKAGES.md`
+- `scripts/build-and-stage.cmd`
+- `scripts/build-and-stage.ps1`
+- `scripts/diagnose-nuget.cmd`

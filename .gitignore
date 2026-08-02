@@ -1,0 +1,34 @@
+# .NET / Visual Studio
+.vs/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build and publish output
+dist/
+.publish-temp/
+artifacts/
+release/
+
+# Macro Manager runtime state
+bridge/
+settings.ini
+UMM.UI.connection.log
+*.log
+*.tmp
+
+# Temporary macro deletion/import folders
+Macros/User/.trash/
+
+# Release archives belong in GitHub Releases
+*.zip
+
+# OS/editor files
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
