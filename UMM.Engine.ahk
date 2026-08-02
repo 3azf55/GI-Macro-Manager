@@ -70,7 +70,7 @@ global AssetsDir := ""
 global IconDir := ""
 global PortraitDir := ""
 global SoundDir := ""
-global AppVersion := "v1.6.1"
+global AppVersion := "v1.6.4"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -961,6 +961,10 @@ MacroCatalog_Initialize() {
         MsgBox, 48, Macro Manager, Some legacy macro packages could not be upgraded.`nThey will be retried on the next startup.
     }
 
+    ; A copied imported package is not visible until it has a registry entry.
+    ; Recover valid orphan user_* folders before loading the UI catalog.
+    MacroCatalog_RegisterOrphanImports()
+
     if (!MacroCatalog_Load()) {
         MsgBox, 48, Macro Manager, No valid macro packages were found in:`n%MacroRegistryFile%
         ExitApp
@@ -1026,6 +1030,326 @@ MacroCatalog_RemoveUtf8Bom() {
     }
 
     return true
+}
+
+
+MacroCatalog_NormalizePackagePath(path) {
+    path := StrReplace(path, "/", "\")
+    path := RTrim(path, "\")
+    StringLower, path, path
+    return path
+}
+
+MacroCatalog_InferImportedName(packageName, characterName) {
+    inferredName := packageName
+    expectedPrefix := "user_" . MacroCatalog_Slug(characterName) . "_"
+
+    if (SubStr(inferredName, 1, StrLen(expectedPrefix)) = expectedPrefix)
+        inferredName := SubStr(inferredName, StrLen(expectedPrefix) + 1)
+
+    ; Imported IDs end with a UTC timestamp and can have a collision suffix.
+    inferredName := RegExReplace(inferredName, "_\d{14}(?:_\d+)?$")
+    inferredName := StrReplace(inferredName, "_", " ")
+    inferredName := Trim(inferredName)
+
+    if (inferredName = "")
+        inferredName := packageName
+
+    return inferredName
+}
+
+MacroCatalog_ReadRunnerMetadata(runnerPath, ByRef executionMode, ByRef detectedTrigger) {
+    executionMode := ""
+    detectedTrigger := ""
+
+    if (!FileExist(runnerPath))
+        return false
+
+    FileRead, runnerText, %runnerPath%
+    if (ErrorLevel)
+        return false
+
+    if RegExMatch(runnerText, "im)^; Original trigger detected automatically:\s*(.+?)\s*$", triggerMatch) {
+        executionMode := "AutoTrigger"
+        detectedTrigger := Trim(triggerMatch1)
+    } else if InStr(runnerText, "IsFunc(" . Chr(34) . "RunMacro" . Chr(34) . ")") {
+        executionMode := "RunMacro"
+    } else {
+        executionMode := "AutoExecute"
+    }
+
+    return true
+}
+
+MacroCatalog_ReadPackageManifest(manifestPath) {
+    metadata := {}
+
+    if (!FileExist(manifestPath))
+        return metadata
+
+    FileRead, manifestText, %manifestPath%
+    if (ErrorLevel)
+        return metadata
+
+    if (Asc(SubStr(manifestText, 1, 1)) = 0xFEFF)
+        manifestText := SubStr(manifestText, 2)
+
+    inMacroSection := false
+    Loop, Parse, manifestText, `n, `r
+    {
+        line := Trim(A_LoopField, " `t")
+        if (line = "" || SubStr(line, 1, 1) = ";")
+            continue
+
+        if (SubStr(line, 1, 1) = "[" && SubStr(line, 0) = "]") {
+            sectionName := Trim(SubStr(line, 2, StrLen(line) - 2))
+            StringLower, sectionName, sectionName
+            inMacroSection := (sectionName = "macro")
+            continue
+        }
+
+        if (!inMacroSection)
+            continue
+
+        separator := InStr(line, "=")
+        if (!separator)
+            continue
+
+        keyName := Trim(SubStr(line, 1, separator - 1))
+        keyValue := Trim(SubStr(line, separator + 1))
+        StringLower, keyName, keyName
+        metadata[keyName] := keyValue
+    }
+
+    return metadata
+}
+
+MacroCatalog_ReadExportMetadata(sourcePath) {
+    metadata := {}
+
+    if (!FileExist(sourcePath))
+        return metadata
+
+    FileRead, sourceText, %sourcePath%
+    if (ErrorLevel)
+        return metadata
+
+    if (Asc(SubStr(sourceText, 1, 1)) = 0xFEFF)
+        sourceText := SubStr(sourceText, 2)
+
+    foundHeader := false
+    Loop, Parse, sourceText, `n, `r
+    {
+        if (A_Index > 40)
+            break
+
+        line := Trim(A_LoopField, " `t")
+        if (line = "; Macro Manager export") {
+            foundHeader := true
+            continue
+        }
+
+        if (!foundHeader) {
+            if (line != "" && SubStr(line, 1, 1) != ";")
+                break
+            continue
+        }
+
+        if (line = "")
+            break
+        if (SubStr(line, 1, 1) != ";")
+            break
+
+        if (!RegExMatch(line, "i)^;\s*([^:]+):\s*(.*)$", fieldMatch))
+            continue
+
+        fieldName := Trim(fieldMatch1)
+        fieldValue := Trim(fieldMatch2)
+        StringLower, fieldName, fieldName
+
+        if (fieldName = "character")
+            metadata["character"] := fieldValue
+        else if (fieldName = "macro")
+            metadata["name"] := fieldValue
+        else if (fieldName = "tooltip")
+            metadata["tooltip"] := fieldValue
+        else if (fieldName = "tag")
+            metadata["tag"] := fieldValue
+        else if (fieldName = "execution mode")
+            metadata["executionmode"] := fieldValue
+        else if (fieldName = "detected trigger")
+            metadata["detectedtrigger"] := fieldValue
+    }
+
+    return metadata
+}
+
+MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageName, comboName, tooltipName, tagName) {
+    manifestText := "[Macro]`r`n"
+        . "Id=" . comboId . "`r`n"
+        . "Character=" . characterName . "`r`n"
+        . "Image=" . imageName . "`r`n"
+        . "Name=" . comboName . "`r`n"
+        . "Tooltip=" . tooltipName . "`r`n"
+        . "Tag=" . tagName . "`r`n"
+        . "Source=source.ahk`r`n"
+        . "Version=1`r`n"
+
+    return MacroCatalog_WriteAtomicText(manifestPath, manifestText)
+}
+
+MacroCatalog_RegisterOrphanImports() {
+    global MacroRegistryFile, MacroRootDir
+
+    registeredPackages := {}
+    knownIds := {}
+    characterBySlug := {}
+    maximumOrder := 0
+
+    IniRead, sections, %MacroRegistryFile%
+    if (sections != "ERROR") {
+        Loop, Parse, sections, `n, `r
+        {
+            section := Trim(A_LoopField)
+            if (SubStr(section, 1, 6) != "Combo.")
+                continue
+
+            IniRead, registeredId, %MacroRegistryFile%, %section%, Id,
+            IniRead, registeredCharacter, %MacroRegistryFile%, %section%, Character,
+            IniRead, registeredScript, %MacroRegistryFile%, %section%, Script,
+            IniRead, registeredOrder, %MacroRegistryFile%, %section%, Order, 0
+
+            registeredId := Trim(registeredId)
+            registeredCharacter := Trim(registeredCharacter)
+            registeredScript := Trim(registeredScript)
+
+            if (registeredId != "")
+                knownIds[registeredId] := true
+
+            if (registeredCharacter != "")
+                characterBySlug[MacroCatalog_Slug(registeredCharacter)] := registeredCharacter
+
+            if (registeredScript != "") {
+                absoluteScript := MacroCatalog_ResolvePath(registeredScript)
+                SplitPath, absoluteScript, , registeredDir
+                if (registeredDir != "")
+                    registeredPackages[MacroCatalog_NormalizePackagePath(registeredDir)] := true
+            }
+
+            registeredOrder += 0
+            if (registeredOrder > maximumOrder)
+                maximumOrder := registeredOrder
+        }
+    }
+
+    userRoot := MacroRootDir . "\User"
+    if !InStr(FileExist(userRoot), "D")
+        return 0
+
+    recoveredCount := 0
+    characterPattern := userRoot . "\*"
+
+    Loop, Files, %characterPattern%, D
+    {
+        characterFolder := A_LoopFileName
+        characterDir := A_LoopFileFullPath
+
+        if (characterFolder = ".trash" || SubStr(characterFolder, 1, 1) = ".")
+            continue
+
+        if (characterBySlug.HasKey(characterFolder))
+            characterName := characterBySlug[characterFolder]
+        else
+            characterName := StrReplace(characterFolder, "_", " ")
+
+        packagePattern := characterDir . "\*"
+        Loop, Files, %packagePattern%, D
+        {
+            packageName := A_LoopFileName
+            packageDir := A_LoopFileFullPath
+
+            if (SubStr(packageName, 1, 5) != "user_")
+                continue
+            if (registeredPackages.HasKey(MacroCatalog_NormalizePackagePath(packageDir)))
+                continue
+            if (knownIds.HasKey(packageName))
+                continue
+
+            sourcePath := packageDir . "\source.ahk"
+            runnerPath := packageDir . "\run.ahk"
+            if (!FileExist(sourcePath))
+                continue
+
+            executionMode := ""
+            detectedTrigger := ""
+
+            if (!FileExist(runnerPath)) {
+                if (!MacroCatalog_CreateImportedRunner(sourcePath, runnerPath, packageName, executionMode, detectedTrigger))
+                    continue
+            } else {
+                MacroCatalog_ReadRunnerMetadata(runnerPath, executionMode, detectedTrigger)
+            }
+
+            manifestPath := packageDir . "\manifest.ini"
+            manifestMetadata := MacroCatalog_ReadPackageManifest(manifestPath)
+            exportMetadata := MacroCatalog_ReadExportMetadata(sourcePath)
+
+            manifestCharacter := Trim(manifestMetadata["character"])
+            if (MacroCatalog_IsSafeField(manifestCharacter, 50)
+                && MacroCatalog_Slug(manifestCharacter) = characterFolder)
+                characterName := manifestCharacter
+
+            comboName := Trim(manifestMetadata["name"])
+            if (!MacroCatalog_IsSafeField(comboName, 60))
+                comboName := Trim(exportMetadata["name"])
+            if (!MacroCatalog_IsSafeField(comboName, 60))
+                comboName := MacroCatalog_InferImportedName(packageName, characterName)
+
+            tooltipName := Trim(manifestMetadata["tooltip"])
+            if (tooltipName = "")
+                tooltipName := Trim(exportMetadata["tooltip"])
+            if (tooltipName != "" && !MacroCatalog_IsSafeField(tooltipName, 80))
+                tooltipName := ""
+
+            tagName := Trim(manifestMetadata["tag"])
+            if (!MacroCatalog_IsAllowedTag(tagName))
+                tagName := Trim(exportMetadata["tag"])
+            if (!MacroCatalog_IsAllowedTag(tagName))
+                tagName := ""
+
+            imageName := Trim(manifestMetadata["image"])
+            if (!MacroCatalog_IsSafeField(imageName, 80))
+                imageName := characterName . ".png"
+
+            relativeScript := SubStr(runnerPath, StrLen(A_ScriptDir) + 2)
+            maximumOrder += 10
+            section := "Combo." . packageName
+
+            IniWrite, %packageName%, %MacroRegistryFile%, %section%, Id
+            IniWrite, %characterName%, %MacroRegistryFile%, %section%, Character
+            IniWrite, %imageName%, %MacroRegistryFile%, %section%, Image
+            IniWrite, %comboName%, %MacroRegistryFile%, %section%, Name
+            IniWrite, %tooltipName%, %MacroRegistryFile%, %section%, Tooltip
+            IniWrite, %tagName%, %MacroRegistryFile%, %section%, Tag
+            IniWrite, %relativeScript%, %MacroRegistryFile%, %section%, Script
+            IniWrite, 0, %MacroRegistryFile%, %section%, BuiltIn
+            IniWrite, %maximumOrder%, %MacroRegistryFile%, %section%, Order
+            IniWrite, %executionMode%, %MacroRegistryFile%, %section%, ExecutionMode
+            IniWrite, %detectedTrigger%, %MacroRegistryFile%, %section%, DetectedTrigger
+
+            if (ErrorLevel)
+                continue
+
+            if (!FileExist(manifestPath))
+                MacroCatalog_WritePackageManifest(manifestPath, packageName, characterName, imageName, comboName, tooltipName, tagName)
+
+            knownIds[packageName] := true
+            registeredPackages[MacroCatalog_NormalizePackagePath(packageDir)] := true
+            recoveredCount += 1
+        }
+    }
+
+    return recoveredCount
 }
 
 
@@ -1294,6 +1618,7 @@ MacroCatalog_Export(comboId) {
         exportPath .= ".ahk"
 
     header := "; Macro Manager export`r`n"
+        . "; UMM Metadata Version: 1`r`n"
         . "; Character: " . combo.character . "`r`n"
         . "; Macro: " . combo.name . "`r`n"
         . "; Tooltip: " . combo.tooltip . "`r`n"
@@ -1724,6 +2049,26 @@ MacroCatalog_Load() {
         if (!FileExist(absoluteScript))
             continue
 
+        ; Repair metadata lost by older project-folder recovery. Registry values
+        ; remain authoritative; only an empty Tag inherits portable metadata.
+        tagName := Trim(tagName)
+        if (tagName = "") {
+            SplitPath, absoluteScript, , packageDir
+            manifestMetadata := MacroCatalog_ReadPackageManifest(packageDir . "\manifest.ini")
+            portableTag := Trim(manifestMetadata["tag"])
+
+            if (!MacroCatalog_IsAllowedTag(portableTag) || portableTag = "") {
+                sourcePath := packageDir . "\source.ahk"
+                exportMetadata := MacroCatalog_ReadExportMetadata(sourcePath)
+                portableTag := Trim(exportMetadata["tag"])
+            }
+
+            if (portableTag != "" && MacroCatalog_IsAllowedTag(portableTag)) {
+                tagName := portableTag
+                IniWrite, %tagName%, %MacroRegistryFile%, %section%, Tag
+            }
+        }
+
         if (imageName = "")
             imageName := characterName . ".png"
 
@@ -1885,6 +2230,22 @@ MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
     IfMsgBox, No
         return false
 
+    ; A Macro Manager export carries portable metadata in comment headers.
+    ; Explicit values chosen in the form win; empty fields inherit metadata.
+    exportMetadata := MacroCatalog_ReadExportMetadata(sourcePath)
+
+    if (tooltipName = "") {
+        exportedTooltip := Trim(exportMetadata["tooltip"])
+        if (exportedTooltip != "" && MacroCatalog_IsSafeField(exportedTooltip, 80))
+            tooltipName := exportedTooltip
+    }
+
+    if (tagName = "") {
+        exportedTag := Trim(exportMetadata["tag"])
+        if (MacroCatalog_IsAllowedTag(exportedTag))
+            tagName := exportedTag
+    }
+
     comboId := "user_" . MacroCatalog_Slug(characterName . "_" . comboName) . "_" . A_NowUTC
     while (MacroById.HasKey(comboId))
         comboId .= "_" . A_TickCount
@@ -1931,6 +2292,11 @@ MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
     IniWrite, %A_NowUTC%, %MacroRegistryFile%, %section%, Order
     IniWrite, %executionMode%, %MacroRegistryFile%, %section%, ExecutionMode
     IniWrite, %detectedTrigger%, %MacroRegistryFile%, %section%, DetectedTrigger
+
+    ; Keep imported folders portable. A manifest lets the package be copied
+    ; between source trees and recovered when its registry entry is missing.
+    manifestPath := absoluteDir . "\manifest.ini"
+    MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, characterName . ".png", comboName, tooltipName, tagName)
 
     if (!MacroCatalog_Load()) {
         WebUI_SendError("The macro was copied, but the catalog could not be reloaded.")

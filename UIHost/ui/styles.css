@@ -503,7 +503,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
   background: #13161e;
   color: #cbd2de;
   text-align: left;
-  transition: .17s ease;
+  transition:
+    transform .2s cubic-bezier(.22, .84, .28, 1),
+    box-shadow .2s ease,
+    border-color .2s ease,
+    background-color .17s ease,
+    color .17s ease,
+    opacity .17s ease;
+  will-change: transform;
 }
 .combo-option:hover {
   z-index: 4;
@@ -565,9 +572,23 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .combo-option:active {
   cursor: grabbing;
 }
+.combo-option > strong,
+.combo-option > .combo-badges {
+  position: relative;
+  z-index: 1;
+}
 .combo-option.is-hold-pending {
-  border-color: rgba(142,168,255,.44);
-  box-shadow: inset 0 0 0 1px rgba(142,168,255,.22);
+  z-index: 7;
+  border-color: rgba(142,168,255,.48);
+  box-shadow:
+    0 4px 12px rgba(0,0,0,.18),
+    inset 0 0 0 1px rgba(142,168,255,.16);
+  animation: comboHoldPress var(--combo-hold-duration, 450ms)
+    cubic-bezier(.2, .72, .24, 1) forwards;
+}
+.combo-option.is-hold-pending[data-tooltip]::before,
+.combo-option.is-hold-pending[data-tooltip]::after {
+  opacity: 0;
 }
 .combo-list.is-reordering {
   user-select: none;
@@ -576,18 +597,35 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .combo-list.is-reordering .combo-option {
   cursor: grabbing;
 }
+.combo-list.is-reordering .combo-option:not(.is-dragging) {
+  opacity: .9;
+  transform: scale(.992);
+}
 .combo-list.is-reordering .combo-option[data-tooltip]::before,
 .combo-list.is-reordering .combo-option[data-tooltip]::after {
   display: none;
 }
 .combo-option.is-dragging {
   z-index: 12;
-  opacity: .74;
-  transform: scale(.975);
-  border-color: rgba(142,168,255,.82);
+  opacity: 1;
+  transform:
+    translate3d(var(--combo-drag-x, 0), calc(-6px + var(--combo-drag-y, 0)), 0)
+    scale(1.025);
+  border-color: rgba(142,168,255,.78);
   box-shadow:
-    0 16px 32px rgba(0,0,0,.34),
-    inset 0 0 0 1px rgba(142,168,255,.28);
+    0 20px 36px rgba(0,0,0,.38),
+    0 3px 10px rgba(0,0,0,.2),
+    inset 0 0 0 1px rgba(142,168,255,.18);
+  transition:
+    transform .09s cubic-bezier(.2, .76, .24, 1),
+    box-shadow .16s ease,
+    border-color .16s ease,
+    opacity .14s ease;
+}
+@keyframes comboHoldPress {
+  0% { transform: translateY(0) scale(1); }
+  55% { transform: translateY(.5px) scale(.991); }
+  100% { transform: translateY(1px) scale(.985); }
 }
 
 .combo-badges {
@@ -985,16 +1023,19 @@ select:disabled {
   color: #ffffff;
 }
 :root[data-theme="light"] .combo-option.is-hold-pending {
-  border-color: #6c88df;
-  box-shadow: inset 0 0 0 1px rgba(52,88,199,.2);
+  border-color: #7890d6;
+  box-shadow:
+    0 4px 10px rgba(44,65,113,.1),
+    inset 0 0 0 1px rgba(52,88,199,.14);
 }
 :root[data-theme="light"] .combo-option.is-dragging {
   background: #3458c7;
   color: #ffffff;
   border-color: #2749b3;
   box-shadow:
-    0 15px 30px rgba(44,65,113,.24),
-    inset 0 0 0 1px rgba(255,255,255,.18);
+    0 18px 34px rgba(44,65,113,.25),
+    0 3px 8px rgba(44,65,113,.13),
+    inset 0 0 0 1px rgba(255,255,255,.16);
 }
 :root[data-theme="light"] .macro-state-button {
   background: #d8f0e4;
@@ -1369,4 +1410,19 @@ select:disabled {
   background: #f6e8cc;
   border-color: #ddbd7d;
   color: #6e440e !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .combo-option,
+  .combo-option.is-hold-pending,
+  .combo-option.is-dragging {
+    animation: none !important;
+    transition-duration: .01ms !important;
+  }
+  .combo-option.is-hold-pending {
+    transform: translateY(1px) scale(.99);
+  }
+  .combo-option.is-dragging {
+    transform: translateY(-2px) scale(1.01);
+  }
 }

@@ -66,3 +66,29 @@ universally transformable.
 Import currently centers on the selected AHK file. Scripts depending on local
 Includes, DLLs, INI files, images, or other assets must keep those dependencies
 available in their package.
+
+## Orphan imported-package recovery
+
+At startup, Macro Manager scans `Macros/User/<Character>/user_*` folders. If a
+folder contains `source.ahk` but has no matching entry in `registry.ini`, the
+engine creates or reuses `run.ahk`, infers the display name from the generated
+folder ID, writes a manifest, and registers the package.
+
+This recovery is intended for folders originally created by Macro Manager.
+Normal custom packages should still include `manifest.ini` and an explicit
+registry entry.
+
+## Portable display metadata
+
+Macro Manager preserves `Name`, `Tooltip`, and `Tag` when a package is copied between project trees. Recovery reads these fields from `manifest.ini`. When the manifest is missing, it can also recover metadata from the comment header of an AHK file exported by Macro Manager.
+
+Supported `Tag` values are:
+
+```text
+60 FPS
+120 FPS
+240 FPS
+TESTING
+```
+
+An explicit tag selected in the import form takes precedence. When the form tag is empty, a valid tag embedded in an exported AHK file is restored automatically.

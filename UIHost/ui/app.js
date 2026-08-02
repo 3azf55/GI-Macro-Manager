@@ -432,6 +432,99 @@ function comboOrderForCurrentCharacter() {
   return $$("#comboList .combo-option").map(button => button.dataset.comboValue);
 }
 
+function captureComboLayout(list) {
+  return new Map(
+    Array.from(list.querySelectorAll(".combo-option")).map(button => [
+      button.dataset.comboValue,
+      button.getBoundingClientRect()
+    ])
+  );
+}
+
+function clampComboMotion(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function updateComboDragMotion(press, event) {
+  if (!press?.active) return;
+
+  const deltaX = event.clientX - press.startX;
+  const deltaY = event.clientY - press.startY;
+  const shiftX = clampComboMotion(deltaX * 0.035, -5, 5);
+  const shiftY = clampComboMotion(deltaY * 0.025, -3, 3);
+
+  press.button.style.setProperty("--combo-drag-x", `${shiftX}px`);
+  press.button.style.setProperty("--combo-drag-y", `${shiftY}px`);
+}
+
+function resetComboDragMotion(button) {
+  button.style.removeProperty("--combo-drag-x");
+  button.style.removeProperty("--combo-drag-y");
+}
+
+function animateComboLift(button) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  button._comboLiftAnimation?.cancel();
+  button._comboLiftAnimation = button.animate(
+    [
+      { transform: "translate3d(0, 1px, 0) scale(.985)" },
+      { transform: "translate3d(0, -8px, 0) scale(1.035)", offset: .62 },
+      { transform: "translate3d(0, -6px, 0) scale(1.025)" }
+    ],
+    {
+      duration: 220,
+      easing: "cubic-bezier(.18, .9, .28, 1.2)"
+    }
+  );
+}
+
+function animateComboLayout(list, beforeLayout, draggedButton = null) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  list.querySelectorAll(".combo-option").forEach(button => {
+    if (button === draggedButton) return;
+
+    const before = beforeLayout.get(button.dataset.comboValue);
+    if (!before) return;
+
+    const after = button.getBoundingClientRect();
+    const deltaX = before.left - after.left;
+    const deltaY = before.top - after.top;
+
+    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) return;
+
+    button._comboReflowAnimation?.cancel();
+    button._comboReflowAnimation = button.animate(
+      [
+        { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+        { transform: "translate3d(0, 0, 0)" }
+      ],
+      {
+        duration: 190,
+        easing: "cubic-bezier(.2, .78, .24, 1)"
+      }
+    );
+  });
+}
+
+function animateComboDrop(button) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  button.animate(
+    [
+      { transform: "translateY(-6px) scale(1.025)" },
+      { transform: "translateY(2px) scale(.992)", offset: .52 },
+      { transform: "translateY(-1px) scale(1.004)", offset: .78 },
+      { transform: "translateY(0) scale(1)" }
+    ],
+    {
+      duration: 310,
+      easing: "cubic-bezier(.2, .82, .28, 1)"
+    }
+  );
+}
+
 function updateLocalComboOrder(character, orderedIds) {
   const characterEntry = characterCatalog[character];
   if (!characterEntry) return;
@@ -465,7 +558,9 @@ function activateComboReorder() {
 
   press.active = true;
   press.button.classList.remove("is-hold-pending");
+  resetComboDragMotion(press.button);
   press.button.classList.add("is-dragging");
+  animateComboLift(press.button);
   press.button.setAttribute("aria-grabbed", "true");
   press.list.classList.add("is-reordering");
   suppressComboClickUntil = Date.now() + 1000;
@@ -523,6 +618,7 @@ function moveComboDuringReorder(event) {
   }
 
   event.preventDefault();
+  updateComboDragMotion(press, event);
 
   const target = document
     .elementFromPoint(event.clientX, event.clientY)
@@ -538,10 +634,18 @@ function moveComboDuringReorder(event) {
     ? event.clientX > targetRect.left + targetRect.width / 2
     : event.clientY > targetRect.top + targetRect.height / 2;
 
+  const beforeOrder = comboOrderForCurrentCharacter();
+  const beforeLayout = captureComboLayout(press.list);
+
   press.list.insertBefore(
     press.button,
     placeAfter ? target.nextSibling : target
   );
+
+  const afterOrder = comboOrderForCurrentCharacter();
+  if (afterOrder.join("|") !== beforeOrder.join("|")) {
+    animateComboLayout(press.list, beforeLayout, press.button);
+  }
 }
 
 function finishComboReorder(event, cancelled = false) {
@@ -558,8 +662,10 @@ function finishComboReorder(event, cancelled = false) {
 
   event.preventDefault();
   press.button.classList.remove("is-dragging");
+  resetComboDragMotion(press.button);
   press.button.removeAttribute("aria-grabbed");
   press.list.classList.remove("is-reordering");
+  animateComboDrop(press.button);
 
   try {
     press.button.releasePointerCapture(press.pointerId);
@@ -568,6 +674,7 @@ function finishComboReorder(event, cancelled = false) {
   }
 
   if (cancelled) {
+    const beforeLayout = captureComboLayout(press.list);
     const buttonById = new Map(
       $$("#comboList .combo-option").map(button => [
         button.dataset.comboValue,
@@ -579,6 +686,8 @@ function finishComboReorder(event, cancelled = false) {
       const button = buttonById.get(comboId);
       if (button) press.list.appendChild(button);
     });
+
+    animateComboLayout(press.list, beforeLayout, press.button);
   } else {
     const newOrder = comboOrderForCurrentCharacter();
     if (newOrder.join("|") !== press.originalOrder.join("|")) {
@@ -632,6 +741,7 @@ function ensureComboButtons() {
       .map(badge => `<span class="${badge.className}">${escapeHtml(badge.text)}</span>`)
       .join("");
 
+    button.style.setProperty("--combo-hold-duration", `${COMBO_LONG_PRESS_MS}ms`);
     button.innerHTML = `
       <strong class="preserve-ltr">${escapeHtml(presentation.label)}</strong>
       ${badges ? `<span class="combo-badges">${badges}</span>` : ""}`;

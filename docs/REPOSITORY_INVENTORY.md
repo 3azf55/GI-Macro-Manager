@@ -1,6 +1,6 @@
 # Repository Inventory
 
-Total source files: 54
+Total tracked-source files before Git: 56
 
 - `.editorconfig`
 - `.gitattributes`
@@ -50,9 +50,11 @@ Total source files: 54
 - `UIHost/ui/styles.css`
 - `UMM.Engine.ahk`
 - `docs/ARCHITECTURE.md`
+- `docs/MACRO_CREDITS.md`
 - `docs/MACRO_PACKAGES.md`
+- `docs/REGISTRY_BOM_FIX.md`
+- `docs/REPOSITORY_INVENTORY.md`
 - `docs/UPDATES.md`
 - `scripts/build-and-stage.cmd`
 - `scripts/build-and-stage.ps1`
 - `scripts/diagnose-nuget.cmd`
-- `docs/REPOSITORY_INVENTORY.md`
