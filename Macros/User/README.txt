@@ -1,1 +1,1 @@
-Imported macros are stored here. Each imported combo receives its own folder, source.ahk, and run.ahk wrapper.
+Macro packages are stored here. Each package uses a stable folder name, contains manifest.ini and source.ahk, and is registered in Macros\registry.ini.

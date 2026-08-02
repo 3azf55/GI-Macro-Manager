@@ -1252,7 +1252,7 @@ select:disabled {
 }
 
 
-/* Fixed original layout. */
+/* Sidebar sizing for the fixed WinForms viewport. */
 .sidebar {
   width: auto;
   min-width: 220px;
@@ -1260,7 +1260,7 @@ select:disabled {
 
 
 
-/* Fixed original desktop layout. The native window owns the dimensions. */
+/* The WebView layout fills the native application window. */
 .app-shell {
   width: 100%;
   height: 100%;
@@ -1283,7 +1283,7 @@ select:disabled {
 }
 
 
-/* v1.2 dynamic macro import */
+/* Macro import dialog. */
 .import-modal {
   width: 520px;
   max-width: calc(100vw - 48px);

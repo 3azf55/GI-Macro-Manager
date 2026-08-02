@@ -1,5 +1,6 @@
 Optional UI fonts:
 OpenSans-Regular.ttf
-OpenSans-SemiBold.ttf
+OpenSans-Semibold.ttf
 
-The Web UI falls back to Segoe UI when these files are absent.
+Open Sans is distributed under the SIL Open Font License 1.1.
+See OFL.txt in this directory. The Web UI falls back to Segoe UI when the font files are absent.

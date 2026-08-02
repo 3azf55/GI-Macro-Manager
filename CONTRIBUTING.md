@@ -19,21 +19,22 @@ The final runtime is created under `dist/`.
 ## Before submitting changes
 
 1. Keep character and macro definitions out of `UMM.Engine.ahk`.
-2. Store macro metadata in `Macros/registry.ini`.
-3. Do not commit `dist`, `.publish-temp`, `bridge`, or local `settings.ini`.
-4. Run:
+2. Store macro metadata in `Macros/registry.ini` and `manifest.ini`.
+3. Use stable package names; do not add timestamped `user_*` folders.
+4. Do not commit `dist`, `.publish-temp`, `bridge`, or local `settings.ini`.
+5. Run:
 
 ```bat
 scripts\build-and-stage.cmd
 ```
 
-5. Check JavaScript syntax when Node.js is installed:
+6. Check JavaScript syntax when Node.js is installed:
 
 ```bat
 node --check UIHost\ui\app.js
 ```
 
-6. Test import, export, deletion, reordering, Trigger release, and `ReleaseAll()` on Windows.
+7. Test import, export, deletion, reordering, Trigger release, and `ReleaseAll()` on Windows.
 
 ## Pull requests
 

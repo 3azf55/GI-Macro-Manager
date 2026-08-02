@@ -30,25 +30,25 @@ The repository includes:
 .github\workflows\release.yml
 ```
 
-Pushing a tag such as `v1.6.0` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
+Pushing a tag such as `v1.6.5` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
 
 Before creating the tag, make sure these versions match:
 
 ```text
-UMM.Engine.ahk                 global AppVersion := "v1.6.0"
-UIHost\UMM.UI.csproj           <Version>1.6.0</Version>
-UIHost\ui\build-info.json      "version": "v1.6.0"
+UMM.Engine.ahk                 global AppVersion := "v1.6.5"
+UIHost\UMM.UI.csproj           <Version>1.6.5</Version>
+UIHost\ui\build-info.json      "version": "v1.6.5"
 ```
 
 Then run:
 
 ```powershell
 git add .
-git commit -m "Release v1.6.0"
+git commit -m "Release v1.6.5"
 git push
 
-git tag v1.6.0
-git push origin v1.6.0
+git tag v1.6.5
+git push origin v1.6.5
 ```
 
 The workflow validates the tag against the engine and UI versions before building.
@@ -70,3 +70,9 @@ The updater:
 The catalog merge keeps custom macro sections and preserves the existing `Order` value for macros included in both catalogs.
 
 The update script also keeps `settings.ini`, the `bridge` directory, and extra custom macro folders that are not present in the release package.
+
+## Manual workflow run
+
+The release workflow can also be started from the Actions tab. Provide an existing tag in `vMAJOR.MINOR.PATCH` format. The workflow checks out that tag and refuses to publish when any project version differs.
+
+Each release includes the runtime ZIP and a SHA-256 checksum file.

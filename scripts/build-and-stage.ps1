@@ -72,6 +72,7 @@ try {
     Copy-Item (Join-Path $PackageRoot "README.md") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "CHANGELOG.md") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "SECURITY.md") $PublishTemp -Force
+    Copy-Item (Join-Path $PackageRoot "THIRD_PARTY_NOTICES.md") $PublishTemp -Force
 
     $EngineFile = Join-Path $PackageRoot "UMM.Engine.ahk"
     $EngineText = Get-Content $EngineFile -Raw

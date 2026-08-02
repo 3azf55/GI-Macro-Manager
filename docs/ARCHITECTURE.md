@@ -11,7 +11,7 @@ The AutoHotkey v1 engine owns:
 - Trigger down/up handling;
 - child macro process lifecycle;
 - input cleanup through `ReleaseAll()`;
-- import analysis and generated runners;
+- import analysis, stable package registration, and generated runners;
 - export, deletion, and reordering;
 - tray menu state;
 - File Bridge commands and state.
