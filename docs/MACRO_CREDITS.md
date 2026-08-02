@@ -1,13 +1,31 @@
 # Macro Timing Credits
 
-The recommended public placement for timing credits is a dedicated **Macro Timing Credits** section on the application's **About** page. Keep it separate from the application copyright notice.
+The following creators are credited for the timing references used by the included macros.
 
-For traceability, each macro package should eventually support optional metadata such as:
+## odanobunaga8199
 
-```ini
-TimingAuthor=Creator name
-TimingSource=https://example.com/source
-TimingNote=Optional context or collaboration credit
-```
+### Skirk
 
-The selected macro panel can show a compact `Timing by <name>` line, while the About page remains the complete credit list. Do not add names without the creator's preferred spelling and source URL.
+- `9N2 2N5 N3`
+- `12N2 4N3`
+
+### Mavuika
+
+- `CQc dCccF dcF dcF dcF`
+
+### Hu Tao
+
+- `10N2CD`
+- `11N2CD`
+
+## nolove721_54075
+
+### Skirk
+
+- `14N 2N3 N4`
+
+## omuriceonionis
+
+### Arlecchino
+
+- `N2W`
