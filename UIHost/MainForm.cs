@@ -12,8 +12,8 @@ public sealed class MainForm : Form
     private const int WmNcLButtonDown = 0x00A1;
     private const int HtCaption = 0x0002;
 
-    private const int FixedClientWidth = 1120;
-    private const int FixedClientHeight = 720;
+    private const int DefaultClientWidth = 1120;
+    private const int DefaultClientHeight = 720;
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>>
         WebEngineCommandSchema = new Dictionary<string, IReadOnlyDictionary<string, int>>(
@@ -27,10 +27,12 @@ public sealed class MainForm : Form
             ["setSoundsEnabled"] = CommandFields(("value", 8)),
             ["setSkipStopMode"] = CommandFields(("value", 16)),
             ["importMacro"] = CommandFields(
-                ("character", 50),
+                ("character", 50)),
+            ["editMacro"] = CommandFields(
+                ("comboId", 120),
                 ("comboName", 60),
                 ("tooltip", 80),
-                ("tag", 16)),
+                ("tag", 32)),
             ["deleteMacro"] = CommandFields(("comboId", 120)),
             ["exportMacro"] = CommandFields(("comboId", 120)),
             ["reorderMacros"] = CommandFields(("character", 50), ("comboIds", 16 * 1024)),
@@ -98,12 +100,15 @@ public sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = false;
-        MinimizeBox = false;
+        MinimizeBox = true;
+        SizeGripStyle = SizeGripStyle.Hide;
         ShowIcon = false;
         BackColor = Color.FromArgb(15, 17, 23);
 
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(FixedClientWidth, FixedClientHeight);
+        ClientSize = new Size(DefaultClientWidth, DefaultClientHeight);
+        MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);
+        MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);
         RestoreWindowPlacement();
 
         // The AutoHotkey engine owns the only notification-area icon.
@@ -136,7 +141,6 @@ public sealed class MainForm : Form
 
         Shown += async (_, _) =>
         {
-            ClientSize = new Size(FixedClientWidth, FixedClientHeight);
             _windowPlacementReady = true;
             _singleInstanceTimer.Start();
             await InitializeWebViewAsync();
@@ -281,6 +285,9 @@ public sealed class MainForm : Form
             {
                 case "windowClose":
                     Close();
+                    return;
+                case "windowMinimize":
+                    WindowState = FormWindowState.Minimized;
                     return;
                 case "windowDrag":
                     BeginWindowDrag();
@@ -673,8 +680,8 @@ public sealed class MainForm : Form
             var requestedBounds = new Rectangle(
                 placement.X,
                 placement.Y,
-                FixedClientWidth,
-                FixedClientHeight);
+                DefaultClientWidth,
+                DefaultClientHeight);
 
             var targetScreen = Screen.AllScreens
                 .OrderByDescending(screen =>
@@ -692,17 +699,19 @@ public sealed class MainForm : Form
             }
 
             var workingArea = targetScreen.WorkingArea;
+            var width = DefaultClientWidth;
+            var height = DefaultClientHeight;
             var maxX = Math.Max(
                 workingArea.Left,
-                workingArea.Right - FixedClientWidth);
+                workingArea.Right - width);
             var maxY = Math.Max(
                 workingArea.Top,
-                workingArea.Bottom - FixedClientHeight);
+                workingArea.Bottom - height);
             var x = Math.Clamp(placement.X, workingArea.Left, maxX);
             var y = Math.Clamp(placement.Y, workingArea.Top, maxY);
 
             StartPosition = FormStartPosition.Manual;
-            Location = new Point(x, y);
+            Bounds = new Rectangle(x, y, width, height);
         }
         catch (Exception exception) when (
             exception is IOException ||
@@ -722,11 +731,11 @@ public sealed class MainForm : Form
 
         try
         {
-            var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-
-            var placement = new WindowPlacement(
-                bounds.X,
-                bounds.Y);
+            var placement = new WindowPlacement
+            {
+                X = Left,
+                Y = Top
+            };
 
             var json = JsonSerializer.Serialize(
                 placement,
@@ -1168,5 +1177,9 @@ public sealed class MainForm : Form
     [DllImport("user32.dll")]
     private static extern nint SendMessage(nint windowHandle, int message, nint wParam, nint lParam);
 
-    private sealed record WindowPlacement(int X, int Y);
+    private sealed class WindowPlacement
+    {
+        public int X { get; init; }
+        public int Y { get; init; }
+    }
 }

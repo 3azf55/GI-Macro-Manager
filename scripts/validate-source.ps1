@@ -37,6 +37,7 @@ $registryPath = Join-Path $Root 'Macros\registry.ini'
 $appJsPath = Join-Path $Root 'UIHost\ui\app.js'
 $stylesPath = Join-Path $Root 'UIHost\ui\styles.css'
 $indexPath = Join-Path $Root 'UIHost\ui\index.html'
+$mainFormPath = Join-Path $Root 'UIHost\MainForm.cs'
 $bridgeProtocolPath = Join-Path $Root 'UIHost\BridgeProtocol.cs'
 $appManifestPath = Join-Path $Root 'UIHost\app.manifest'
 $runtimePath = Join-Path $Root 'Macros\Runtime\MacroRuntime.ahk'
@@ -44,7 +45,7 @@ $releaseWorkflowPath = Join-Path $Root '.github\workflows\release.yml'
 $licensePath = Join-Path $Root 'LICENSE'
 $creditsPath = Join-Path $Root 'docs\MACRO_CREDITS.md'
 
-foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $bridgeProtocolPath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath)) {
+foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $mainFormPath, $bridgeProtocolPath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath)) {
     Assert-True (Test-Path $required -PathType Leaf) "Required source file is missing: $required"
 }
 
@@ -82,7 +83,24 @@ foreach ($match in $scriptMatches) {
     Assert-True ($trackedCase -ccontains $relative) "Registry script path is missing or has incorrect letter case: $relative"
 }
 
-$allowedTags = @('', '60 FPS', '120 FPS', '240 FPS', 'TESTING')
+$allowedTagValues = @('60 FPS', '120 FPS', '240 FPS', 'TESTING')
+function Test-MacroTags {
+    param([AllowEmptyString()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $true
+    }
+
+    $tags = @($Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($tags.Count -eq 0 -or @($tags | Select-Object -Unique).Count -ne $tags.Count) {
+        return $false
+    }
+    if (@($tags | Where-Object { $allowedTagValues -cnotcontains $_ }).Count -gt 0) {
+        return $false
+    }
+
+    return @($tags | Where-Object { $_ -like '* FPS' }).Count -le 1
+}
 $comboSections = [regex]::Matches(
     $registryText,
     '(?ms)^\[Combo\.([^\]]+)\]\s*\r?\n(.*?)(?=^\[|\z)')
@@ -98,7 +116,7 @@ foreach ($comboSection in $comboSections) {
         Assert-True ($values.ContainsKey($requiredKey)) "Registry section $($comboSection.Groups[1].Value) is missing $requiredKey."
     }
 
-    Assert-True ($allowedTags -ccontains $values.Tag) "Unsupported macro tag '$($values.Tag)' in $($values.Id)."
+    Assert-True (Test-MacroTags $values.Tag) "Unsupported macro tags '$($values.Tag)' in $($values.Id)."
     $characterCounts[$values.Character] = 1 + [int]($characterCounts[$values.Character])
 
     $relativeScript = $values.Script.Replace('/', '\')
@@ -201,6 +219,45 @@ Assert-True (-not $bridgeProtocolText.Contains('EngineWindowLocator')) 'Unused E
 Assert-True (-not $bridgeProtocolText.Contains('public static bool Send(')) 'Unused WM_COPYDATA sender remains in BridgeProtocol.cs.'
 $appJsText = [System.IO.File]::ReadAllText($appJsPath)
 Assert-True (-not $appJsText.Contains('function fillSelect(')) 'Unused fillSelect() remains in app.js.'
+Assert-True ($engineText.Contains('MacroCatalog_Import(characterName)')) `
+    'Macro import must derive display metadata after the user selects an AHK file.'
+Assert-True ($engineText.Contains('MacroCatalog_Edit(comboId, comboName, tooltipName, tagName)')) `
+    'The engine must support editing existing macro metadata.'
+Assert-True (-not $engineText.Contains('MsgBox, 52, Import AutoHotkey macro')) `
+    'Macro import must not display the removed confirmation prompt.'
+Assert-True (-not $appJsText.Contains('Select this macro')) `
+    'Macro cards without a description must not display placeholder text.'
+Assert-True (-not $appJsText.Contains('button.dataset.tooltip')) `
+    'Macro cards must not recreate the removed hover tooltip.'
+$indexText = [System.IO.File]::ReadAllText($indexPath)
+Assert-True ($indexText.Contains('<span>Import macro</span>')) `
+    'The character page must label the import action as Import macro.'
+Assert-True (-not $indexText.Contains('id="macroImportModal"')) `
+    'The removed macro import metadata form must not return.'
+Assert-True ($indexText.Contains('class="sidebar-icon-toggle sound-feedback-toggle"') -and `
+            $indexText.Contains('class="sidebar-icon-toggle theme-toggle"')) `
+    'Sound feedback and color theme must remain compact icon controls in the sidebar.'
+Assert-True (-not $indexText.Contains('class="surface-card sound-card"') -and `
+            -not $indexText.Contains('class="surface-card mode-card"')) `
+    'Sound feedback and Application Mode must not return as standalone Dashboard cards.'
+Assert-True ([regex]::IsMatch($indexText, 'class="[^"]*\bhero-mode-setting\b[^"]*"')) `
+    'Application Mode must remain inside the selected Character Combos card.'
+Assert-True ($indexText.Contains('class="hero-dashboard-content"') -and `
+            $indexText.Contains('class="hero-dashboard-top"') -and `
+            $indexText.Contains('class="quick-card"') -and `
+            $indexText.Contains('class="hero-setting-card skip-card"')) `
+    'Quick Controls and Skip Dialog Behavior must remain embedded in the Character Combos card.'
+Assert-True (-not $indexText.Contains('data-window-action="maximize"')) `
+    'The fixed application window must not display a maximize control.'
+$mainFormText = [System.IO.File]::ReadAllText($mainFormPath)
+Assert-True ($mainFormText.Contains('MaximizeBox = false;')) `
+    'The native application window must keep maximize disabled.'
+Assert-True ($mainFormText.Contains('MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);') -and `
+            $mainFormText.Contains('MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);')) `
+    'The native application window must keep one fixed size.'
+Assert-True (-not $mainFormText.Contains('windowMaximize') -and `
+            -not $mainFormText.Contains('HitTestResizeBorder')) `
+    'Window maximize and resize-border handling must remain removed.'
 Assert-True ($engineText.Contains('WebUI_IsSafeProtocolValue(value, maximumLength)')) `
     'The AHK bridge must validate protocol values without the legacy control-character regex.'
 Assert-True (-not $engineText.Contains('InStr(payload, Chr(0))')) `
@@ -215,6 +272,36 @@ Assert-True ($engineText.Contains('"INVALID_BRIDGE_PAYLOAD"')) `
     'Malformed bridge payloads must use a non-retriable protocol error code.'
 Assert-True ($appJsText.Contains('function requestState()')) `
     'The UI must throttle state synchronization requests.'
+Assert-True ($appJsText.Contains('function navigateToPage(pageName)')) `
+    'The UI must animate navigation through the section-navigation helper.'
+Assert-True ($appJsText.Contains('function maybeShowUpdatePrompt(message)')) `
+    'The UI must present automatic update availability with update and reminder actions.'
+$stylesText = [System.IO.File]::ReadAllText($stylesPath)
+Assert-True ($stylesText.Contains('@media (prefers-reduced-motion: reduce)')) `
+    'Interface animations must provide a reduced-motion fallback.'
+Assert-True ($stylesText.Contains('aspect-ratio: 1 / 1')) `
+    'Character cards must preserve square 256 x 256 portrait proportions.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.character-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)')) `
+    'The desktop character grid must keep four cards in each row.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.dashboard-layout\s*\{[^}]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)')) `
+    'The desktop dashboard must use the balanced twelve-column card layout.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.hero-dashboard-top\s*\{[^}]*grid-template-columns:\s*minmax\(128px,\s*150px\)\s+minmax\(0,\s*1fr\)\s+minmax\(174px,\s*190px\)')) `
+    'Quick Controls must remain in the upper-right area of the Character Combos card.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.quick-card\s*\{[^}]*width:\s*100%;[^}]*aspect-ratio:\s*1\s*/\s*1')) `
+    'Quick Controls must remain a compact square inside the Character Combos card.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.hero-settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)')) `
+    'Application Mode and Skip Dialog Behavior must remain equal-sized controls in the bottom row.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.dashboard-layout\s*\{[^}]*align-items:\s*start;')) `
+    'Dashboard cards must size to their content instead of stretching to the tallest card in the row.'
+$hotkeyHoverRule = [regex]::Match($stylesText, '(?s)\.hotkey-card:hover\s*\{([^}]*)\}')
+Assert-True $hotkeyHoverRule.Success 'The Hotkeys page must define a hover treatment for its cards.'
+Assert-True (-not $hotkeyHoverRule.Groups[1].Value.Contains('transform:')) `
+    'Hotkey-card hover must not move the card, because crossing its transformed boundary causes repeated hover jitter.'
+Assert-True ($appJsText.Contains('function ensureHotkeyCards()') -and `
+            $appJsText.Contains('if (grid.dataset.initialized === "1") return;')) `
+    'Hotkey cards must keep stable DOM nodes instead of being recreated during every state update.'
+Assert-True (-not $stylesText.Contains('.combo-option[data-tooltip]')) `
+    'Macro-card hover tooltip styles must remain removed.'
 $rawStatePostCount = [regex]::Matches($appJsText, 'post\(["'']requestState["'']\)').Count
 Assert-True ($rawStatePostCount -eq 1) `
     'All state requests must pass through the single throttled requestState() helper.'

@@ -1,9 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Changed Add macro to Import macro and removed the metadata form and trust confirmation from the import flow.
+- Import names, descriptions, and tags from leading AHK comment metadata, with a filename-based name fallback and automatic duplicate suffixes.
+- Added editing for existing macro names, descriptions, FPS tags, and TESTING tags while preserving stable macro IDs and package folders.
+- Removed macro-card hover tooltips, empty Select this macro placeholders, and character macro-count labels.
+- Updated character cards for square 256 x 256 portraits and removed the press-stage transform that caused macro cards to shake during normal selection.
+- Reorganized the Dashboard with Application Mode inside the selected Character Combos card and a square Quick Controls card.
+- Expanded the Character Combos card to embed square Quick Controls in its upper-right area and place equal-sized Application Mode and Skip Dialog Behavior controls in its bottom row.
+- Moved Sound Feedback beside the compact icon-only theme control in the sidebar.
+- Reduced the spacing in the Trigger release / Any key selector.
+- Reduced character-card sizing to four cards per desktop row and stabilized Hotkey-card DOM and hover rendering to prevent repeated pointer jitter.
+
+## v1.7.4
+
+- Added animated section transitions while preserving the reduced-motion preference.
+- Added an in-app startup update prompt with Update now and Remind me later actions.
+- Made the borderless application window resizable and persisted its position and dimensions.
+- Converted character, macro, hotkey, community, and update content into responsive card grids.
+- Strengthened typography hierarchy, rounded inputs and data containers, and added subtle hover transitions and shadows.
+- Made Administrator-policy source validation independent of Windows CRLF line endings.
+- Added clear retry handling when a running process temporarily locks the staged build folders.
+
 ## v1.7.3
 
-- Added a one-time, staged entrance animation when the interface opens.
-- Kept the entrance animation separate from page and theme transitions and disabled it when reduced motion is requested.
+- Added a one-time staggered entrance animation for the title bar, sidebar, and main content.
+- Preserved `prefers-reduced-motion` behavior for the startup animation.
 
 ## v1.7.2
 

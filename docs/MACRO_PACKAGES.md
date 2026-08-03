@@ -39,7 +39,7 @@ Character=Example Hero
 Image=Example Hero.png
 Name=Example combo
 Tooltip=Optional description
-Tag=120 FPS
+Tag=120 FPS, TESTING
 Script=Macros\User\Example_Hero\Example_combo\run.ahk
 BuiltIn=0
 Order=10
@@ -58,7 +58,7 @@ Character=Example Hero
 Image=Example Hero.png
 Name=Example combo
 Tooltip=Optional description
-Tag=120 FPS
+Tag=120 FPS, TESTING
 Source=source.ahk
 ManagedPackage=1
 PackageFormat=2
@@ -69,7 +69,17 @@ The manifest makes the package portable and distinguishes an intentional macro p
 
 ## Import behavior
 
-The importer copies the selected file to `source.ahk`, writes the manifest and registry entry, and creates `run.ahk` when required.
+Selecting **Import macro** opens the AHK file picker directly. The importer does not display a separate metadata form or confirmation prompt. It copies the selected file to `source.ahk`, writes the manifest and registry entry, and creates `run.ahk` when required.
+
+The importer reads optional metadata from the leading comment block. `Name` and `Macro`, `Description` and `Tooltip`, and `Tags` and `Tag` are accepted aliases:
+
+```ahk
+; Name: Example combo
+; Description: Optional description shown below the macro name
+; Tags: 120 FPS, TESTING
+```
+
+If no explicit name is present, the importer derives a readable name from the `.ahk` filename. If that name already exists for the selected character, it appends `(2)`, `(3)`, and so on without asking for additional input. Invalid or unsupported metadata is ignored safely.
 
 It classifies the script as:
 
@@ -106,7 +116,7 @@ The legacy command form and every possible custom input implementation are not u
 
 ## Portable display metadata
 
-Macro Manager preserves `Name`, `Tooltip`, and `Tag` when a package is copied between project trees. Recovery reads these fields from `manifest.ini`. When importing an AHK file exported by Macro Manager, metadata can also be restored from its comment header.
+Macro Manager preserves `Name`, `Tooltip`, and `Tag` when a package is copied between project trees. `Tooltip` remains the compatibility key in registry and manifest files, but the interface presents it as the macro description. Recovery reads these fields from `manifest.ini`. Import also reads equivalent metadata from the leading AHK comment block.
 
 Supported `Tag` values are:
 
@@ -117,7 +127,7 @@ Supported `Tag` values are:
 TESTING
 ```
 
-The import form defaults to **Use exported tag automatically**, so FPS and TESTING metadata travel with a Macro Manager export. Selecting an explicit tag takes precedence; selecting **None** intentionally removes the exported tag.
+One FPS tag and the `TESTING` tag can be combined, for example `120 FPS, TESTING`. Existing macros can be edited from the character page. Editing updates the registry and package manifest together while keeping the macro ID and folder stable.
 
 ## External dependencies
 

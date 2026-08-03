@@ -24,6 +24,32 @@ function Invoke-DotNet {
     }
 }
 
+function Remove-DirectoryWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [int]$MaximumAttempts = 5
+    )
+
+    for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            }
+
+            return
+        }
+        catch {
+            if ($attempt -eq $MaximumAttempts) {
+                throw "Unable to remove '$Path'. Close Macro Manager, AutoHotkey, Explorer, and any terminal using that folder. $($_.Exception.Message)"
+            }
+
+            Write-Warning "The folder is in use. Retrying in 2 seconds ($attempt/$MaximumAttempts)..."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw ".NET SDK was not found. Install the .NET 8 SDK, then reopen the terminal."
 }
@@ -37,7 +63,7 @@ if (-not (Test-Path $NuGetConfig)) {
 }
 
 if (Test-Path $PublishTemp) {
-    Remove-Item $PublishTemp -Recurse -Force
+    Remove-DirectoryWithRetry -Path $PublishTemp
 }
 
 New-Item $PublishTemp -ItemType Directory | Out-Null
@@ -127,7 +153,7 @@ try {
         $Utf8NoBom)
 
     if (Test-Path $Dist) {
-        Remove-Item $Dist -Recurse -Force
+        Remove-DirectoryWithRetry -Path $Dist
     }
 
     Move-Item $PublishTemp $Dist

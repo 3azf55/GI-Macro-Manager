@@ -8,6 +8,8 @@ const communityLinks = {
 const releasesUrl = "https://github.com/3azf55/GI-Macro-Manager/releases";
 
 const THEME_STORAGE_KEY = "umm-theme";
+const UPDATE_REMINDER_STORAGE_KEY = "umm-update-reminder";
+const UPDATE_REMINDER_DELAY_MS = 6 * 60 * 60 * 1000;
 
 let buildInfo = {
   version: "—",
@@ -27,6 +29,7 @@ let updateState = {
 };
 
 let lastAnnouncedUpdate = "";
+const promptedUpdateVersions = new Set();
 
 const translations = {
   controlCenter: "CONTROL CENTER",
@@ -108,7 +111,7 @@ function applyStaticTranslations() {
 let characterCatalog = {};
 
 let catalogJsonCache = "";
-let macroImportCharacter = "";
+let macroEditTarget = null;
 let macroDeleteTarget = null;
 
 const hotkeyCatalog = [
@@ -156,26 +159,6 @@ const MAX_VISIBLE_TOASTS = 3;
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
-
-function finishInterfaceEntrance() {
-  const root = document.documentElement;
-  if (!root.classList.contains("ui-entering")) return;
-
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    root.classList.remove("ui-entering");
-    return;
-  }
-
-  const shell = $(".app-shell");
-  const clearEntranceState = event => {
-    if (event && (event.target !== shell || event.animationName !== "interface-shell-enter")) return;
-    shell?.removeEventListener("animationend", clearEntranceState);
-    root.classList.remove("ui-entering");
-  };
-
-  shell?.addEventListener("animationend", clearEntranceState);
-  window.setTimeout(() => clearEntranceState(), 900);
-}
 
 function post(action, payload = {}) {
   if (!bridge) {
@@ -337,7 +320,9 @@ function applyMessage(message) {
         lastAnnouncedUpdate = message.latestVersion;
         showToast(`${message.latestVersion} is available.`);
       }
+      if (!manual) maybeShowUpdatePrompt(message);
     } else if (message.status === "installed") {
+      clearUpdateReminder();
       showToast(message.message || "Update installed successfully.");
     } else if (message.status === "error" && manual) {
       showToast(message.message || "The update operation failed.", true);
@@ -370,6 +355,97 @@ function applyMessage(message) {
     return;
   }
 
+}
+
+function readUpdateReminder() {
+  try {
+    const value = JSON.parse(localStorage.getItem(UPDATE_REMINDER_STORAGE_KEY) || "null");
+    if (!value || typeof value !== "object") return null;
+    return {
+      version: String(value.version || ""),
+      remindAfter: Number(value.remindAfter || 0)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearUpdateReminder() {
+  try {
+    localStorage.removeItem(UPDATE_REMINDER_STORAGE_KEY);
+  } catch {
+    // An unavailable storage area must not block update actions.
+  }
+}
+
+function snoozeAvailableUpdate() {
+  const version = String(updateState.latestVersion || "").trim();
+  if (version) {
+    try {
+      localStorage.setItem(UPDATE_REMINDER_STORAGE_KEY, JSON.stringify({
+        version,
+        remindAfter: Date.now() + UPDATE_REMINDER_DELAY_MS
+      }));
+    } catch {
+      // The prompt still closes when storage is unavailable.
+    }
+  }
+
+  closeUpdatePrompt();
+}
+
+function maybeShowUpdatePrompt(message) {
+  const version = String(message.latestVersion || "").trim();
+  if (!version || promptedUpdateVersions.has(version)) return;
+
+  const reminder = readUpdateReminder();
+  if (reminder?.version === version && reminder.remindAfter > Date.now()) return;
+
+  if (reminder && reminder.version !== version) clearUpdateReminder();
+  promptedUpdateVersions.add(version);
+
+  $("#updatePromptVersion").textContent = version;
+  $("#updatePromptTitle").textContent = `${version} is ready`;
+  $("#updatePromptDescription").textContent = updateState.canInstall
+    ? "Update Macro Manager now to get the latest improvements and fixes. The application will restart automatically."
+    : "A new release is available. Open the release page to download the latest version.";
+
+  renderUpdatePromptAction();
+  $("#updatePromptModal").classList.remove("hidden");
+  window.setTimeout(() => $("#updateNowButton").focus(), 0);
+}
+
+function renderUpdatePromptAction() {
+  const updateButton = $("#updateNowButton");
+  if (!updateButton) return;
+
+  updateButton.textContent = updateState.canInstall ? "Update now" : "Open release";
+  updateButton.disabled = updateState.canInstall && state.macroRunning;
+  updateButton.title = updateButton.disabled
+    ? "Release the macro trigger before installing the update."
+    : "";
+}
+
+function closeUpdatePrompt() {
+  $("#updatePromptModal").classList.add("hidden");
+}
+
+function acceptAvailableUpdate() {
+  if (updateState.canInstall) {
+    if (state.macroRunning) {
+      showToast("Release the macro trigger before installing the update.", true);
+      return;
+    }
+
+    clearUpdateReminder();
+    closeUpdatePrompt();
+    post("installUpdate");
+    return;
+  }
+
+  clearUpdateReminder();
+  closeUpdatePrompt();
+  post("openExternal", { url: updateState.releaseUrl || releasesUrl });
 }
 
 function render() {
@@ -410,8 +486,12 @@ function previewSegmentedSelection(button) {
 }
 
 function renderDashboard() {
-  $("#soundToggle").checked = state.soundsEnabled;
-  $("#soundTitle").textContent = state.soundsEnabled ? t("enabled") : t("muted");
+  const soundToggle = $("#soundToggle");
+  const soundControl = $("#soundControl");
+  const soundStateLabel = state.soundsEnabled ? "Sound feedback enabled" : "Sound feedback muted";
+  soundToggle.checked = state.soundsEnabled;
+  soundToggle.setAttribute("aria-label", soundStateLabel);
+  soundControl.title = state.soundsEnabled ? "Mute sound feedback" : "Enable sound feedback";
   $("#modeTitle").textContent = state.appMode === "SkipDialogs" ? t("skipDialogs") : t("characterCombos");
   $("#skipBehaviorTitle").textContent = state.skipStopMode === "AnyKey" ? t("untilAnyKey") : t("untilTriggerReleased");
 
@@ -799,7 +879,6 @@ function ensureComboButtons() {
 
     const reorderHelp = "Press and hold, then drag to reorder.";
     if (combo.tooltip) {
-      button.dataset.tooltip = combo.tooltip;
       button.setAttribute(
         "aria-label",
         `${presentation.label}: ${combo.tooltip}. ${reorderHelp}`
@@ -815,9 +894,14 @@ function ensureComboButtons() {
       .map(badge => `<span class="${badge.className}">${escapeHtml(badge.text)}</span>`)
       .join("");
 
-    button.style.setProperty("--combo-hold-duration", `${COMBO_LONG_PRESS_MS}ms`);
+    const description = combo.tooltip
+      ? `<small>${escapeHtml(combo.tooltip)}</small>`
+      : "";
     button.innerHTML = `
-      <strong class="preserve-ltr">${escapeHtml(presentation.label)}</strong>
+      <span class="combo-copy">
+        <strong class="preserve-ltr">${escapeHtml(presentation.label)}</strong>
+        ${description}
+      </span>
       ${badges ? `<span class="combo-badges">${badges}</span>` : ""}`;
 
     button.addEventListener("pointerdown", event => {
@@ -878,6 +962,16 @@ function renderCharacters() {
   const isLastCharacterMacro = characterMacroCount <= 1;
   const canDelete = canManageSelected && !selectedCombo.builtIn && !isLastCharacterMacro;
 
+  const editMacroButton = $("#editMacroButton");
+  editMacroButton.disabled = !canManageSelected;
+  editMacroButton.title = hasSelectedCombo
+    ? `Edit ${selectedCombo.label}`
+    : "Select a macro first.";
+  editMacroButton.setAttribute(
+    "aria-label",
+    hasSelectedCombo ? `Edit ${selectedCombo.label}` : "Edit selected macro"
+  );
+
   const exportMacroButton = $("#exportMacroButton");
   exportMacroButton.disabled = !canManageSelected;
   exportMacroButton.title = hasSelectedCombo
@@ -912,34 +1006,49 @@ function renderCharacters() {
   });
 }
 
-function renderHotkeys() {
+function ensureHotkeyCards() {
   const grid = $("#hotkeyGrid");
-  grid.innerHTML = "";
-
-  if (state.macroRunning && captureTarget) {
-    endHotkeyCapture();
-  }
+  if (grid.dataset.initialized === "1") return;
 
   hotkeyCatalog.forEach(item => {
     const card = document.createElement("article");
-    card.className = `hotkey-card${state.macroRunning ? " is-disabled" : ""}`;
+    card.className = "hotkey-card";
+    card.dataset.hotkeyTarget = item.target;
     card.innerHTML = `
       <div class="hotkey-copy">
         <h3 class="hotkey-title">${item.title.toUpperCase()}</h3>
         <p class="hotkey-description">${item.description}</p>
       </div>
       <div class="hotkey-action">
-        <div class="hotkey-value">${escapeHtml(state[item.stateKey] || "—")}</div>
-        <button class="secondary-button" ${state.macroRunning ? "disabled" : ""}>Change</button>
+        <div class="hotkey-value">—</div>
+        <button class="secondary-button">Change</button>
       </div>`;
 
+    card.querySelector("button").addEventListener("click", () => beginHotkeyCapture(item));
+    grid.appendChild(card);
+  });
+
+  grid.dataset.initialized = "1";
+}
+
+function renderHotkeys() {
+  const grid = $("#hotkeyGrid");
+  ensureHotkeyCards();
+
+  if (state.macroRunning && captureTarget) {
+    endHotkeyCapture();
+  }
+
+  hotkeyCatalog.forEach((item, index) => {
+    const card = grid.children[index];
+    const value = card.querySelector(".hotkey-value");
     const changeButton = card.querySelector("button");
+    card.classList.toggle("is-disabled", state.macroRunning);
+    value.textContent = state[item.stateKey] || "—";
+    changeButton.disabled = state.macroRunning;
     changeButton.title = state.macroRunning
       ? t("releaseBeforeHotkeys")
       : t("changeHotkeyTitle", { name: item.title });
-
-    changeButton.addEventListener("click", () => beginHotkeyCapture(item));
-    grid.appendChild(card);
   });
 
   const resetButton = $("#resetHotkeysButton");
@@ -1039,6 +1148,7 @@ function renderUpdateStatus() {
   progressBar.style.width = hasProgress
     ? `${Math.max(0, Math.min(100, updateState.progress))}%`
     : "0%";
+  renderUpdatePromptAction();
 }
 
 function renderAboutMeta() {
@@ -1081,10 +1191,16 @@ function applyTheme(theme, persist = true) {
   const icon = $("#themeIcon");
   const label = $("#themeLabel");
   const hint = $("#themeHint");
+  const toggle = $("#themeToggle");
 
   if (icon) icon.textContent = isDark ? "☾" : "☀";
   if (label) label.textContent = isDark ? "Dark mode" : "Light mode";
   if (hint) hint.textContent = isDark ? "Switch to light" : "Switch to dark";
+  if (toggle) {
+    const actionLabel = isDark ? "Switch to light mode" : "Switch to dark mode";
+    toggle.setAttribute("aria-label", actionLabel);
+    toggle.title = actionLabel;
+  }
 
   if (persist) localStorage.setItem(THEME_STORAGE_KEY, selectedTheme);
 }
@@ -1215,36 +1331,52 @@ function openMacroImport() {
     return;
   }
 
-  macroImportCharacter = state.character;
-  $("#macroImportTitle").textContent = "Add macro";
-  $("#macroImportCharacter").textContent = macroImportCharacter;
-  $("#macroComboName").value = "";
-  $("#macroTooltip").value = "";
-  $("#macroTag").value = "AUTO";
-  $("#macroImportModal").classList.remove("hidden");
-  setTimeout(() => $("#macroComboName").focus(), 0);
+  post("importMacro", { character: state.character });
 }
 
-function closeMacroImport() {
-  $("#macroImportModal").classList.add("hidden");
-  macroImportCharacter = "";
+function openMacroEdit(combo) {
+  if (!combo || state.macroRunning) return;
+
+  macroEditTarget = {
+    comboId: combo.value,
+    character: state.character
+  };
+
+  $("#macroEditCharacter").textContent = state.character;
+  $("#macroEditName").value = combo.label || "";
+  $("#macroEditDescription").value = combo.tooltip || "";
+  $("#macroEditFpsTag").value = combo.fps || "";
+  $("#macroEditTestingTag").checked = Boolean(combo.testing);
+  $("#macroEditModal").classList.remove("hidden");
+  setTimeout(() => {
+    $("#macroEditName").focus();
+    $("#macroEditName").select();
+  }, 0);
 }
 
-function submitMacroImport(event) {
+function closeMacroEdit() {
+  $("#macroEditModal").classList.add("hidden");
+  macroEditTarget = null;
+}
+
+function submitMacroEdit(event) {
   event.preventDefault();
 
-  const character = macroImportCharacter;
-  const comboName = $("#macroComboName").value.trim();
-  const tooltip = $("#macroTooltip").value.trim();
-  const tag = $("#macroTag").value;
+  const target = macroEditTarget;
+  const comboName = $("#macroEditName").value.trim();
+  const tooltip = $("#macroEditDescription").value.trim();
+  const tags = [
+    $("#macroEditFpsTag").value,
+    $("#macroEditTestingTag").checked ? "TESTING" : ""
+  ].filter(Boolean);
 
-  if (!character || !characterCatalog[character]) {
-    showToast("The selected character is no longer available.", true);
-    closeMacroImport();
+  if (!target || !getSelectedCombo() || target.comboId !== getSelectedCombo().value) {
+    showToast("The selected macro is no longer available.", true);
+    closeMacroEdit();
     return;
   }
   if (!comboName) {
-    showToast("Combo name is required.", true);
+    showToast("Macro name is required.", true);
     return;
   }
   if (/[\r\n\t=|]/.test(comboName) || /[\r\n\t=|]/.test(tooltip)) {
@@ -1252,12 +1384,12 @@ function submitMacroImport(event) {
     return;
   }
 
-  closeMacroImport();
-  post("importMacro", {
-    character,
+  closeMacroEdit();
+  post("editMacro", {
+    comboId: target.comboId,
     comboName,
     tooltip,
-    tag
+    tag: tags.join(", ")
   });
 }
 
@@ -1321,13 +1453,35 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 }
 
-$$('.nav-item').forEach(button => button.addEventListener('click', () => {
-  $$('.nav-item').forEach(item => item.classList.toggle('active', item === button));
-  $$('.page').forEach(page => page.classList.toggle('active', page.dataset.pagePanel === button.dataset.page));
-}));
+function navigateToPage(pageName) {
+  const nextPage = $(`.page[data-page-panel="${pageName}"]`);
+  const currentPage = $(".page.active");
+  if (!nextPage || nextPage === currentPage) return;
+
+  $$(".nav-item").forEach(item => {
+    const selected = item.dataset.page === pageName;
+    item.classList.toggle("active", selected);
+    item.setAttribute("aria-current", selected ? "page" : "false");
+  });
+
+  currentPage?.classList.remove("active", "is-entering");
+  nextPage.classList.remove("is-entering");
+  nextPage.classList.add("active");
+
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    void nextPage.offsetWidth;
+    nextPage.classList.add("is-entering");
+    window.setTimeout(() => nextPage.classList.remove("is-entering"), 560);
+  }
+
+  requestAnimationFrame(updateAllSegmentedIndicators);
+}
+
+$$('.nav-item').forEach(button => button.addEventListener('click', () => navigateToPage(button.dataset.page)));
 
 $$('[data-window-action]').forEach(button => button.addEventListener('click', () => {
   if (button.dataset.windowAction === 'close') post('windowClose');
+  if (button.dataset.windowAction === 'minimize') post('windowMinimize');
 }));
 
 $('#titlebar').addEventListener('mousedown', event => {
@@ -1370,6 +1524,8 @@ $('#installUpdateButton').addEventListener('click', () => {
 $('#viewReleaseButton').addEventListener('click', () => {
   post('openExternal', { url: updateState.releaseUrl || releasesUrl });
 });
+$('#remindUpdateLaterButton').addEventListener('click', snoozeAvailableUpdate);
+$('#updateNowButton').addEventListener('click', acceptAvailableUpdate);
 $('#cancelHotkeyButton').addEventListener('click', endHotkeyCapture);
 $('#hotkeyModal').addEventListener('pointerdown', event => {
   if (!captureTarget || (event.button !== 3 && event.button !== 4)) return;
@@ -1382,6 +1538,12 @@ $('#hotkeyModal').addEventListener('pointerdown', event => {
   endHotkeyCapture();
 });
 $('#addMacroButton').addEventListener('click', openMacroImport);
+$('#editMacroButton').addEventListener('click', () => {
+  const selectedCombo = getSelectedCombo();
+  if (selectedCombo && !state.macroRunning) {
+    openMacroEdit(selectedCombo);
+  }
+});
 $('#exportMacroButton').addEventListener('click', () => {
   const selectedCombo = getSelectedCombo();
   if (selectedCombo && !state.macroRunning) {
@@ -1395,10 +1557,10 @@ $('#deleteMacroButton').addEventListener('click', () => {
     openMacroDelete(selectedCombo);
   }
 });
-$('#cancelMacroImportButton').addEventListener('click', closeMacroImport);
-$('#macroImportForm').addEventListener('submit', submitMacroImport);
-$('#macroImportModal').addEventListener('mousedown', event => {
-  if (event.target === $('#macroImportModal')) closeMacroImport();
+$('#cancelMacroEditButton').addEventListener('click', closeMacroEdit);
+$('#macroEditForm').addEventListener('submit', submitMacroEdit);
+$('#macroEditModal').addEventListener('mousedown', event => {
+  if (event.target === $('#macroEditModal')) closeMacroEdit();
 });
 
 $('#cancelMacroDeleteButton').addEventListener('click', closeMacroDelete);
@@ -1436,8 +1598,13 @@ window.addEventListener('keydown', event => {
     return;
   }
 
-  if (event.key === 'Escape' && !$('#macroImportModal').classList.contains('hidden')) {
-    closeMacroImport();
+  if (event.key === 'Escape' && !$('#macroEditModal').classList.contains('hidden')) {
+    closeMacroEdit();
+    return;
+  }
+
+  if (event.key === 'Escape' && !$('#updatePromptModal').classList.contains('hidden')) {
+    snoozeAvailableUpdate();
     return;
   }
 
@@ -1468,9 +1635,25 @@ applyTheme(savedTheme || (systemPrefersLight ? 'light' : 'dark'), false);
 document.documentElement.lang = "en";
 document.documentElement.dir = "ltr";
 applyStaticTranslations();
-finishInterfaceEntrance();
 loadBuildInfo();
 
 bridge?.addEventListener('message', event => applyMessage(event.data));
 requestState();
 render();
+
+function runStartupAnimation() {
+  const body = document.body;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) {
+    body.classList.remove("app-starting");
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    body.classList.remove("app-starting");
+    body.classList.add("app-ready");
+    window.setTimeout(() => body.classList.remove("app-ready"), 850);
+  });
+}
+
+runStartupAnimation();

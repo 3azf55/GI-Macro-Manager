@@ -9,8 +9,9 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - Modern WebView2 interface with dark and light themes
 - Dynamic character and macro catalog
 - Separate AutoHotkey process for each running macro
-- AutoHotkey v1 import with hotkey, `RunMacro()`, and auto-execute detection
+- One-click AutoHotkey v1 import with comment metadata, filename fallback, hotkey, `RunMacro()`, and auto-execute detection
 - Stable package names for imported macros
+- Editable macro names, descriptions, FPS tags, and TESTING tags
 - Add, export, delete, and reorder macro packages
 - Configurable, conflict-checked hotkeys active only while the selected game window is focused
 - Skip Dialogs mode and optional game launcher

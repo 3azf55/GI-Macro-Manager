@@ -91,7 +91,7 @@ global SkipInterruptKeyList := ""
 global AssetsDir := ""
 global IconDir := ""
 global SoundDir := ""
-global AppVersion := "v1.7.3"
+global AppVersion := "v1.7.4"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -636,7 +636,7 @@ WebUI_IsSafeProtocolValue(value, maximumLength) {
 }
 
 WebUI_IsAllowedAction(action) {
-    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setMacroEnabled|setSoundsEnabled|setSkipStopMode|importMacro|deleteMacro|exportMacro|reorderMacros|setHotkey|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
+    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setMacroEnabled|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|setHotkey|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
     return InStr(allowedActions, "|" . action . "|", true)
 }
 
@@ -709,10 +709,16 @@ WebUI_HandleCommand(message) {
 
     if (action = "importMacro") {
         characterName := message.HasKey("character") ? message.character : ""
+        MacroCatalog_Import(characterName)
+        return
+    }
+
+    if (action = "editMacro") {
+        comboId := message.HasKey("comboId") ? message.comboId : ""
         comboName := message.HasKey("comboName") ? message.comboName : ""
         tooltipName := message.HasKey("tooltip") ? message.tooltip : ""
         tagName := message.HasKey("tag") ? message.tag : ""
-        MacroCatalog_Import(characterName, comboName, tooltipName, tagName)
+        MacroCatalog_Edit(comboId, comboName, tooltipName, tagName)
         return
     }
 
@@ -1183,26 +1189,14 @@ MacroCatalog_ReadExportMetadata(sourcePath) {
     if (Asc(SubStr(sourceText, 1, 1)) = 0xFEFF)
         sourceText := SubStr(sourceText, 2)
 
-    foundHeader := false
     Loop, Parse, sourceText, `n, `r
     {
-        if (A_Index > 40)
+        if (A_Index > 80)
             break
 
         line := Trim(A_LoopField, " `t")
-        if (line = "; Macro Manager export") {
-            foundHeader := true
-            continue
-        }
-
-        if (!foundHeader) {
-            if (line != "" && SubStr(line, 1, 1) != ";")
-                break
-            continue
-        }
-
         if (line = "")
-            break
+            continue
         if (SubStr(line, 1, 1) != ";")
             break
 
@@ -1212,14 +1206,15 @@ MacroCatalog_ReadExportMetadata(sourcePath) {
         fieldName := Trim(fieldMatch1)
         fieldValue := Trim(fieldMatch2)
         StringLower, fieldName, fieldName
+        fieldName := LTrim(fieldName, "@")
 
         if (fieldName = "character")
             metadata["character"] := fieldValue
-        else if (fieldName = "macro")
+        else if (fieldName = "macro" || fieldName = "name")
             metadata["name"] := fieldValue
-        else if (fieldName = "tooltip")
+        else if (fieldName = "tooltip" || fieldName = "description")
             metadata["tooltip"] := fieldValue
-        else if (fieldName = "tag")
+        else if (fieldName = "tag" || fieldName = "tags")
             metadata["tag"] := fieldValue
         else if (fieldName = "execution mode")
             metadata["executionmode"] := fieldValue
@@ -1834,7 +1829,9 @@ MacroCatalog_Export(comboId) {
         . "; UMM Metadata Version: 2`r`n"
         . "; Character: " . combo.character . "`r`n"
         . "; Macro: " . combo.name . "`r`n"
+        . "; Description: " . combo.tooltip . "`r`n"
         . "; Tooltip: " . combo.tooltip . "`r`n"
+        . "; Tags: " . combo.tag . "`r`n"
         . "; Tag: " . combo.tag . "`r`n"
         . "; Execution mode: " . combo.executionMode . "`r`n"
         . "; Detected trigger: " . combo.detectedTrigger . "`r`n"
@@ -2389,24 +2386,82 @@ MacroCatalog_NormalizeTag(tagName) {
     if (normalized = "")
         return ""
 
-    StringUpper, normalized, normalized
-    normalized := RegExReplace(normalized, "\s+", " ")
+    normalized := StrReplace(normalized, ";", "`n")
+    normalized := StrReplace(normalized, "|", "`n")
+    normalized := StrReplace(normalized, ",", "`n")
+    fpsTag := ""
+    hasTestingTag := false
 
-    if (normalized = "60 FPS" || normalized = "120 FPS" || normalized = "240 FPS" || normalized = "TESTING")
-        return normalized
+    Loop, Parse, normalized, `n, `r
+    {
+        token := Trim(A_LoopField, " `t")
+        if (token = "")
+            continue
 
-    return "__INVALID_TAG__"
+        StringUpper, token, token
+        token := RegExReplace(token, "\s+", " ")
+
+        if (token = "TESTING") {
+            hasTestingTag := true
+            continue
+        }
+
+        if (token = "60 FPS" || token = "120 FPS" || token = "240 FPS") {
+            if (fpsTag != "" && fpsTag != token)
+                return "__INVALID_TAG__"
+            fpsTag := token
+            continue
+        }
+
+        return "__INVALID_TAG__"
+    }
+
+    result := fpsTag
+    if (hasTestingTag)
+        result .= (result = "" ? "" : ", ") . "TESTING"
+    return result
 }
 
-MacroCatalog_ComboNameExists(characterName, comboName) {
+MacroCatalog_ComboNameExists(characterName, comboName, excludedComboId := "") {
     global CharacterCatalog
     if (!CharacterCatalog.HasKey(characterName))
         return false
     for index, combo in CharacterCatalog[characterName].combos {
-        if (combo.name = comboName)
+        if (combo.id != excludedComboId && combo.name = comboName)
             return true
     }
     return false
+}
+
+MacroCatalog_SanitizeDisplayField(value, maximumLength) {
+    value := RegExReplace(value, "[\r\n\t=|]+", " ")
+    value := RegExReplace(Trim(value), "\s+", " ")
+    return SubStr(value, 1, maximumLength)
+}
+
+MacroCatalog_InferNameFromFile(sourcePath) {
+    SplitPath, sourcePath, , , , sourceName
+    sourceName := RegExReplace(sourceName, "[_-]+", " ")
+    sourceName := MacroCatalog_SanitizeDisplayField(sourceName, 60)
+    return sourceName != "" ? sourceName : "Imported macro"
+}
+
+MacroCatalog_SelectUniqueName(characterName, preferredName) {
+    preferredName := MacroCatalog_SanitizeDisplayField(preferredName, 60)
+    if (preferredName = "")
+        preferredName := "Imported macro"
+    if (!MacroCatalog_ComboNameExists(characterName, preferredName))
+        return preferredName
+
+    Loop, 999
+    {
+        suffix := " (" . (A_Index + 1) . ")"
+        candidate := SubStr(preferredName, 1, 60 - StrLen(suffix)) . suffix
+        if (!MacroCatalog_ComboNameExists(characterName, candidate))
+            return candidate
+    }
+
+    return ""
 }
 
 MacroCatalog_Slug(value) {
@@ -2480,7 +2535,7 @@ MacroCatalog_GetNextOrder() {
     return maximumOrder + 10
 }
 
-MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
+MacroCatalog_Import(characterName) {
     global MacroRegistryFile, MacroRootDir, MacroById, CurrentCharacter, CurrentMacro, MacroRunning
 
     if (MacroRunning) {
@@ -2489,33 +2544,9 @@ MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
     }
 
     characterName := Trim(characterName)
-    comboName := Trim(comboName)
-    tooltipName := Trim(tooltipName)
-    tagName := Trim(tagName)
-
-    StringUpper, tagMode, tagName
-    inheritExportedTag := (tagMode = "" || tagMode = "AUTO")
-    if (tagMode = "NONE")
-        tagName := ""
-    else if (!inheritExportedTag)
-        tagName := MacroCatalog_NormalizeTag(tagName)
-    else
-        tagName := ""
 
     if (!MacroCatalog_IsSafeField(characterName, 50)) {
         WebUI_SendError("Choose a valid character name.")
-        return false
-    }
-    if (!MacroCatalog_IsSafeField(comboName, 60)) {
-        WebUI_SendError("Combo name is required and cannot contain tabs, line breaks, =, or |.")
-        return false
-    }
-    if (tooltipName != "" && !MacroCatalog_IsSafeField(tooltipName, 80)) {
-        WebUI_SendError("Tooltip cannot contain tabs, line breaks, =, or |.")
-        return false
-    }
-    if (tagName = "__INVALID_TAG__" || !MacroCatalog_IsAllowedTag(tagName)) {
-        WebUI_SendError("Invalid combo tag.")
         return false
     }
 
@@ -2524,34 +2555,25 @@ MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
         return false
     }
 
-    if (MacroCatalog_ComboNameExists(characterName, comboName)) {
-        WebUI_SendError("A combo with that name already exists for this character.")
-        return false
-    }
-
     FileSelectFile, sourcePath, 3,, Import AutoHotkey macro, AutoHotkey scripts (*.ahk)
     if (ErrorLevel || sourcePath = "")
         return false
 
-    MsgBox, 52, Import AutoHotkey macro, AutoHotkey files can run programs and access your files.`n`nImport this file only if you trust its source.`n`n%sourcePath%
-    IfMsgBox, No
-        return false
-
-    ; A Macro Manager export carries portable metadata in comment headers.
-    ; Explicit values chosen in the form win; empty fields inherit metadata.
+    ; Read explicit comment metadata when present. Plain AHK files require no
+    ; import form: their display name is derived from the filename instead.
     exportMetadata := MacroCatalog_ReadExportMetadata(sourcePath)
+    comboName := MacroCatalog_SanitizeDisplayField(exportMetadata["name"], 60)
+    if (comboName = "")
+        comboName := MacroCatalog_InferNameFromFile(sourcePath)
+    comboName := MacroCatalog_SelectUniqueName(characterName, comboName)
+    tooltipName := MacroCatalog_SanitizeDisplayField(exportMetadata["tooltip"], 80)
+    tagName := MacroCatalog_NormalizeTag(exportMetadata["tag"])
+    if (tagName = "__INVALID_TAG__")
+        tagName := ""
 
-    if (tooltipName = "") {
-        exportedTooltip := Trim(exportMetadata["tooltip"])
-        if (exportedTooltip != "" && MacroCatalog_IsSafeField(exportedTooltip, 80))
-            tooltipName := exportedTooltip
-    }
-
-    if (inheritExportedTag) {
-        exportedTag := Trim(exportMetadata["tag"])
-        normalizedExportedTag := MacroCatalog_NormalizeTag(exportedTag)
-        if (normalizedExportedTag != "__INVALID_TAG__")
-            tagName := normalizedExportedTag
+    if (!MacroCatalog_IsSafeField(comboName, 60)) {
+        WebUI_SendError("Unable to infer a valid macro name from the selected file.")
+        return false
     }
 
     characterFolder := MacroCatalog_Slug(characterName)
@@ -2651,6 +2673,82 @@ MacroCatalog_Import(characterName, comboName, tooltipName, tagName) {
         importNotice .= " RunMacro() will run from Macro Manager's trigger."
 
     WebUI_SendNotice(importNotice)
+    return true
+}
+
+MacroCatalog_Edit(comboId, comboName, tooltipName, tagName) {
+    global MacroRunning
+
+    if (MacroRunning) {
+        WebUI_SendError("Release the trigger before editing a macro.")
+        return false
+    }
+
+    comboId := Trim(comboId)
+    comboName := Trim(comboName)
+    tooltipName := Trim(tooltipName)
+    tagName := MacroCatalog_NormalizeTag(tagName)
+    combo := MacroCatalog_GetCombo(comboId)
+
+    if (!IsObject(combo)) {
+        WebUI_SendError("The selected macro no longer exists.")
+        return false
+    }
+    if (!MacroCatalog_IsSafeField(comboName, 60)) {
+        WebUI_SendError("Macro name is required and cannot contain tabs, line breaks, =, or |.")
+        return false
+    }
+    if (tooltipName != "" && !MacroCatalog_IsSafeField(tooltipName, 80)) {
+        WebUI_SendError("Description cannot contain tabs, line breaks, =, or |.")
+        return false
+    }
+    if (tagName = "__INVALID_TAG__") {
+        WebUI_SendError("Invalid macro tags.")
+        return false
+    }
+    if (MacroCatalog_ComboNameExists(combo.character, comboName, combo.id)) {
+        WebUI_SendError("A macro with that name already exists for this character.")
+        return false
+    }
+
+    oldName := combo.name
+    oldTooltip := combo.tooltip
+    oldTag := combo.tag
+    combo.name := comboName
+    combo.tooltip := tooltipName
+    combo.tag := tagName
+
+    if (!MacroCatalog_WriteComboSection(combo)) {
+        combo.name := oldName
+        combo.tooltip := oldTooltip
+        combo.tag := oldTag
+        MacroCatalog_WriteComboSection(combo)
+        WebUI_SendError("Unable to save the macro details.")
+        return false
+    }
+
+    absoluteScript := MacroCatalog_ResolvePath(combo.script)
+    SplitPath, absoluteScript, , packageDir
+    manifestPath := packageDir . "\manifest.ini"
+    if (!MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag)) {
+        combo.name := oldName
+        combo.tooltip := oldTooltip
+        combo.tag := oldTag
+        MacroCatalog_WriteComboSection(combo)
+        MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag)
+        WebUI_SendError("Unable to update the macro manifest.")
+        return false
+    }
+
+    if (!MacroCatalog_Load()) {
+        WebUI_SendError("The macro details were saved, but the catalog could not be reloaded.")
+        return false
+    }
+
+    SetupTrayMenu()
+    UpdateTrayText()
+    WebUI_SendState()
+    WebUI_SendNotice("Updated " . comboName . ".")
     return true
 }
 
@@ -2945,10 +3043,10 @@ MacroCatalog_ToJson() {
             json .= "," . q . "label" . q . ":" . q . MacroCatalog_JsonEscape(combo.name) . q
             json .= "," . q . "tooltip" . q . ":" . q . MacroCatalog_JsonEscape(combo.tooltip) . q
             json .= "," . q . "builtIn" . q . ":" . (combo.builtIn ? "true" : "false")
-            if (combo.tag = "TESTING")
+            if InStr("," . combo.tag . ",", "TESTING")
                 json .= "," . q . "testing" . q . ":true"
-            else if InStr(combo.tag, "FPS")
-                json .= "," . q . "fps" . q . ":" . q . MacroCatalog_JsonEscape(combo.tag) . q
+            if RegExMatch(combo.tag, "i)(60|120|240) FPS", fpsMatch)
+                json .= "," . q . "fps" . q . ":" . q . fpsMatch1 . " FPS" . q
             json .= "}"
         }
         json .= "]}"

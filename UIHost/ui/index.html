@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="en" class="ui-entering">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Macro Manager</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="app-starting">
   <div class="app-shell">
     <header class="titlebar" id="titlebar">
       <div class="brand-lockup">
@@ -21,6 +21,7 @@
           <span class="title-language-code">EN</span>
         </span>
         <div class="window-controls" aria-label="Window controls">
+          <button class="window-button minimize" data-window-action="minimize" aria-label="Minimize interface" title="Minimize interface"><span class="window-glyph" aria-hidden="true"></span></button>
           <button class="window-button close" data-window-action="close" aria-label="Close interface" title="Close interface"><span class="window-glyph" aria-hidden="true"></span></button>
         </div>
       </div>
@@ -28,7 +29,7 @@
 
     <aside class="sidebar" aria-label="Application navigation">
       <nav class="nav-list" aria-label="Main navigation">
-        <button class="nav-item active" data-page="dashboard">
+        <button class="nav-item active" data-page="dashboard" aria-current="page">
           <span class="nav-icon">⌂</span><span class="preserve-ltr">Dashboard</span>
         </button>
         <button class="nav-item" data-page="characters">
@@ -45,14 +46,20 @@
         </button>
       </nav>
 
-      <div class="sidebar-footer">
-
-        <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch color theme" title="Switch color theme">
-          <span class="theme-icon" id="themeIcon" aria-hidden="true">☾</span>
-          <span class="theme-copy">
-            <strong id="themeLabel">Dark mode</strong>
-            <small id="themeHint">Switch to light</small>
+      <div class="sidebar-footer" aria-label="Quick preferences">
+        <label class="sidebar-icon-toggle sound-feedback-toggle" id="soundControl" title="Mute sound feedback">
+          <input type="checkbox" id="soundToggle" aria-label="Sound feedback enabled" />
+          <span class="sidebar-action-icon sound-feedback-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M4 9h4l5-4v14l-5-4H4V9Z" />
+              <path class="sound-wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
+              <path class="sound-slash" d="m16.5 9 5 6M21.5 9l-5 6" />
+            </svg>
           </span>
+        </label>
+
+        <button class="sidebar-icon-toggle theme-toggle" id="themeToggle" type="button" aria-label="Switch to light mode" title="Switch to light mode">
+          <span class="sidebar-action-icon theme-icon" id="themeIcon" aria-hidden="true">☾</span>
         </button>
       </div>
     </aside>
@@ -67,55 +74,60 @@
           </div>
         </div>
 
-        <article class="hero-card">
-          <div class="hero-image-frame">
-            <img id="heroImage" alt="Current selection" />
-            <div id="heroFallback" class="image-fallback">MM</div>
-          </div>
-          <div class="hero-copy">
-            <span id="heroMode" class="eyebrow">CHARACTER COMBOS</span>
-            <h2 id="heroTitle">No character</h2>
-            <p id="heroSubtitle">No macro selected</p>
-            <div class="hero-tags">
-              <span class="soft-chip" id="triggerChip">Trigger —</span>
-            </div>
-          </div>
-        </article>
+        <div class="dashboard-layout">
+          <article class="hero-card">
+            <div class="hero-dashboard-content">
+              <div class="hero-dashboard-top">
+                <div class="hero-image-frame">
+                  <img id="heroImage" alt="Current selection" />
+                  <div id="heroFallback" class="image-fallback">MM</div>
+                </div>
 
-        <div class="dashboard-grid">
-          <article class="surface-card mode-card">
-            <div class="card-heading"><span class="eyebrow" data-i18n="applicationMode">APPLICATION MODE</span><h3 id="modeTitle">Character combos</h3></div>
-            <div class="segmented" id="modeSegmented">
-              <span class="segmented-indicator" aria-hidden="true"></span>
-              <button data-mode="CharacterCombos">Character combos</button>
-              <button data-mode="SkipDialogs">Skip dialogs</button>
-            </div>
-          </article>
+                <div class="hero-copy">
+                  <span id="heroMode" class="eyebrow">CHARACTER COMBOS</span>
+                  <h2 id="heroTitle">No character</h2>
+                  <p id="heroSubtitle">No macro selected</p>
+                  <div class="hero-tags">
+                    <span class="soft-chip" id="triggerChip">Trigger —</span>
+                  </div>
+                </div>
 
-          <article class="surface-card sound-card">
-            <div class="card-heading"><span class="eyebrow" data-i18n="soundFeedback">SOUND FEEDBACK</span><h3 id="soundTitle">Enabled</h3></div>
-            <label class="switch">
-              <input type="checkbox" id="soundToggle" />
-              <span class="switch-track"></span>
-            </label>
-          </article>
+                <section class="quick-card" aria-labelledby="quickControlsLabel">
+                  <span class="eyebrow" id="quickControlsLabel" data-i18n="quickControls">QUICK CONTROLS</span>
+                  <div class="quick-hotkeys">
+                    <div><span>Trigger</span><strong id="quickTrigger">—</strong></div>
+                    <div><span>Mode</span><strong id="quickMode">—</strong></div>
+                    <div><span>Character</span><strong id="quickCharacter">—</strong></div>
+                    <div><span>Combo</span><strong id="quickCombo">—</strong></div>
+                  </div>
+                </section>
+              </div>
 
-          <article class="surface-card quick-card">
-            <span class="eyebrow" data-i18n="quickControls">QUICK CONTROLS</span>
-            <div class="quick-hotkeys">
-              <div><span>Trigger</span><strong id="quickTrigger">—</strong></div>
-              <div><span>Mode</span><strong id="quickMode">—</strong></div>
-              <div><span>Character</span><strong id="quickCharacter">—</strong></div>
-              <div><span>Combo</span><strong id="quickCombo">—</strong></div>
-            </div>
-          </article>
+              <div class="hero-settings-grid">
+                <section class="hero-setting-card hero-mode-setting" aria-labelledby="applicationModeLabel">
+                  <div class="hero-setting-heading">
+                    <span class="eyebrow" id="applicationModeLabel" data-i18n="applicationMode">APPLICATION MODE</span>
+                    <strong id="modeTitle">Character combos</strong>
+                  </div>
+                  <div class="segmented compact hero-setting-segmented" id="modeSegmented">
+                    <span class="segmented-indicator" aria-hidden="true"></span>
+                    <button data-mode="CharacterCombos">Character combos</button>
+                    <button data-mode="SkipDialogs">Skip dialogs</button>
+                  </div>
+                </section>
 
-          <article class="surface-card skip-card">
-            <div class="card-heading"><span class="eyebrow" data-i18n="skipDialogBehavior">SKIP DIALOG BEHAVIOR</span><h3 id="skipBehaviorTitle">Until trigger released</h3></div>
-            <div class="segmented compact" id="skipBehaviorSegmented">
-              <span class="segmented-indicator" aria-hidden="true"></span>
-              <button data-skip-mode="Release">Trigger release</button>
-              <button data-skip-mode="AnyKey">Any key</button>
+                <section class="hero-setting-card skip-card" aria-labelledby="skipDialogBehaviorLabel">
+                  <div class="hero-setting-heading">
+                    <span class="eyebrow" id="skipDialogBehaviorLabel" data-i18n="skipDialogBehavior">SKIP DIALOG BEHAVIOR</span>
+                    <strong id="skipBehaviorTitle">Until trigger released</strong>
+                  </div>
+                  <div class="segmented compact hero-setting-segmented" id="skipBehaviorSegmented">
+                    <span class="segmented-indicator" aria-hidden="true"></span>
+                    <button data-skip-mode="Release">Trigger release</button>
+                    <button data-skip-mode="AnyKey">Any key</button>
+                  </div>
+                </section>
+              </div>
             </div>
           </article>
         </div>
@@ -135,9 +147,14 @@
           <div class="combo-panel-footer">
             <button class="primary-button combo-add-action" id="addMacroButton" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
-              <span>Add macro</span>
+              <span>Import macro</span>
             </button>
             <div class="combo-manage-actions" aria-label="Macro actions">
+              <button class="combo-tool-button" id="editMacroButton" type="button" aria-label="Edit selected macro">
+                <svg class="stroke-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m4 20 4.2-1 10.9-10.9a2.1 2.1 0 0 0-3-3L5.2 16 4 20Zm10.8-13.6 3 3"/>
+                </svg>
+              </button>
               <button class="combo-tool-button" id="exportMacroButton" type="button" aria-label="Export selected macro">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9l3.5-3.5 1.4 1.4L12 15.8 6.1 9.9l1.4-1.4L11 12V3Zm-6 14h2v2h10v-2h2v4H5v-4Z"/></svg>
               </button>
@@ -261,42 +278,47 @@
   </div>
 
 
-  <div class="modal-backdrop hidden" id="macroImportModal">
-    <form class="hotkey-modal import-modal" id="macroImportForm">
-      <span class="eyebrow">IMPORT AHK MACRO</span>
-      <h2 id="macroImportTitle">Add macro</h2>
+  <div class="modal-backdrop hidden" id="macroEditModal">
+    <form class="hotkey-modal import-modal" id="macroEditForm">
+      <span class="eyebrow">EDIT MACRO</span>
+      <h2 id="macroEditTitle">Edit macro</h2>
 
-      <div class="import-target" aria-label="Target character">
+      <div class="import-target" aria-label="Macro character">
         <span>Character</span>
-        <strong id="macroImportCharacter">—</strong>
+        <strong id="macroEditCharacter">—</strong>
       </div>
 
       <label class="import-field">
-        <span>Combo name</span>
-        <input id="macroComboName" type="text" maxlength="60" autocomplete="off" required />
+        <span>Macro name</span>
+        <input id="macroEditName" type="text" maxlength="60" autocomplete="off" required />
       </label>
 
       <label class="import-field">
-        <span>Tooltip <small>Optional</small></span>
-        <input id="macroTooltip" type="text" maxlength="80" autocomplete="off" />
+        <span>Description <small>Optional</small></span>
+        <input id="macroEditDescription" type="text" maxlength="80" autocomplete="off" />
       </label>
 
       <label class="import-field">
-        <span>Tag <small>Optional</small></span>
-        <select id="macroTag">
-          <option value="AUTO">Use exported tag automatically</option>
-          <option value="NONE">None</option>
+        <span>FPS tag <small>Optional</small></span>
+        <select id="macroEditFpsTag">
+          <option value="">None</option>
           <option value="60 FPS">60 FPS</option>
           <option value="120 FPS">120 FPS</option>
           <option value="240 FPS">240 FPS</option>
-          <option value="TESTING">TESTING</option>
         </select>
       </label>
 
-      <p class="import-warning">After confirming, choose the AHK file. Imported scripts run with your Windows user permissions. Import only files you trust.</p>
+      <label class="tag-toggle" for="macroEditTestingTag">
+        <input id="macroEditTestingTag" type="checkbox" />
+        <span>
+          <strong>TESTING</strong>
+          <small>Add the testing tag to this macro</small>
+        </span>
+      </label>
+
       <div class="import-actions">
-        <button class="secondary-button" id="cancelMacroImportButton" type="button">Cancel</button>
-        <button class="primary-button" id="confirmMacroImportButton" type="submit">Choose AHK & Import</button>
+        <button class="secondary-button" id="cancelMacroEditButton" type="button">Cancel</button>
+        <button class="primary-button" id="confirmMacroEditButton" type="submit">Save changes</button>
       </div>
     </form>
   </div>
@@ -313,6 +335,25 @@
       <div class="import-actions">
         <button class="secondary-button" id="cancelMacroDeleteButton" type="button">Cancel</button>
         <button class="danger-button" id="confirmMacroDeleteButton" type="button">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="updatePromptModal">
+    <div class="update-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="updatePromptTitle" aria-describedby="updatePromptDescription">
+      <span class="update-prompt-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+      </span>
+      <span class="eyebrow">UPDATE AVAILABLE</span>
+      <h2 id="updatePromptTitle">A new version is ready</h2>
+      <p id="updatePromptDescription">Update Macro Manager now to get the latest improvements and fixes.</p>
+      <div class="update-prompt-version">
+        <span>Available version</span>
+        <strong id="updatePromptVersion">—</strong>
+      </div>
+      <div class="update-prompt-actions">
+        <button class="secondary-button" id="remindUpdateLaterButton" type="button">Remind me later</button>
+        <button class="primary-button" id="updateNowButton" type="button">Update now</button>
       </div>
     </div>
   </div>
