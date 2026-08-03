@@ -18,6 +18,12 @@ Macro Manager starts a macro in a separate AutoHotkey child process and can term
 
 A script may start another process or create persistent system changes that remain after the original child process is terminated.
 
+## Windows privilege boundary
+
+Macro Manager intentionally requests Administrator permission at startup. The engine uses a single `/restart`-guarded UAC relaunch and exits if elevation is not granted, so a failed elevation cannot create a restart loop.
+
+The WebView2 host and imported macro child processes inherit the engine's elevated token. Commands received from WebView2 are allowlisted, size-limited, and normalized again at the engine boundary, but the local file bridge is an IPC mechanism rather than a security sandbox. Never import an untrusted macro or allow untrusted users or processes to modify the installation directory while Macro Manager is running.
+
 ## Reporting a vulnerability
 
 Do not post credentials, personal paths, private macros, or sensitive logs in a public issue.

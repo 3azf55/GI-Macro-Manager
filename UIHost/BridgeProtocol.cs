@@ -5,19 +5,52 @@ namespace UMM.UI;
 
 internal static class LineProtocol
 {
+    internal const int MaximumPayloadLength = 1024 * 1024;
+    private const int MaximumLineCount = 256;
+    private const int MaximumKeyLength = 64;
+    private const int MaximumValueLength = 512 * 1024;
+
     public static Dictionary<string, string> Parse(string payload)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(payload) || payload.Length > MaximumPayloadLength)
+        {
+            return result;
+        }
+
+        var lineCount = 0;
         foreach (var rawLine in payload.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
-            var separator = line.IndexOf('=');
-            if (separator <= 0)
+            if (line.Length == 0)
             {
                 continue;
             }
 
-            result[line[..separator]] = line[(separator + 1)..];
+            lineCount++;
+            if (lineCount > MaximumLineCount)
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var separator = line.IndexOf('=');
+            if (separator <= 0)
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var key = line[..separator];
+            if (!IsValidKey(key) || result.ContainsKey(key))
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            if (!TryNormalizeValue(line[(separator + 1)..], MaximumValueLength, out var value))
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            result[key] = value;
         }
 
         return result;
@@ -25,16 +58,95 @@ internal static class LineProtocol
 
     public static string Serialize(IEnumerable<KeyValuePair<string, string?>> values)
     {
-        return string.Join("\n", values.Select(pair =>
-            $"{Sanitize(pair.Key)}={Sanitize(pair.Value ?? string.Empty)}"));
+        var payload = new StringBuilder();
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lineCount = 0;
+
+        foreach (var pair in values)
+        {
+            lineCount++;
+            if (lineCount > MaximumLineCount ||
+                !IsValidKey(pair.Key) ||
+                !seenKeys.Add(pair.Key))
+            {
+                throw new InvalidDataException("The line protocol contains an invalid key set.");
+            }
+
+            if (!TryNormalizeValue(pair.Value, MaximumValueLength, out var value))
+            {
+                throw new InvalidDataException($"The line protocol value for '{pair.Key}' is too long.");
+            }
+
+            if (payload.Length > 0)
+            {
+                payload.Append('\n');
+            }
+
+            payload.Append(pair.Key).Append('=').Append(value);
+            if (payload.Length > MaximumPayloadLength)
+            {
+                throw new InvalidDataException("The line protocol payload is too large.");
+            }
+        }
+
+        return payload.ToString();
     }
 
-    private static string Sanitize(string value) => value.Replace("\r", " ").Replace("\n", " ");
+    public static bool TryNormalizeCommandValue(
+        string? value,
+        int maximumLength,
+        out string normalized) =>
+        TryNormalizeValue(value, maximumLength, out normalized);
+
+    private static bool IsValidKey(string key)
+    {
+        if (key.Length is < 1 or > MaximumKeyLength || !IsAsciiLetter(key[0]))
+        {
+            return false;
+        }
+
+        return key.Skip(1).All(character => IsAsciiLetter(character) || char.IsAsciiDigit(character));
+    }
+
+    private static bool IsAsciiLetter(char character) =>
+        character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool TryNormalizeValue(
+        string? value,
+        int maximumLength,
+        out string normalized)
+    {
+        value ??= string.Empty;
+        if (maximumLength < 0 || value.Length > maximumLength)
+        {
+            normalized = string.Empty;
+            return false;
+        }
+
+        StringBuilder? builder = null;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character is '\r' or '\n' or '\t' or '\0' || char.IsControl(character))
+            {
+                builder ??= new StringBuilder(value[..index], value.Length);
+                builder.Append(' ');
+            }
+            else
+            {
+                builder?.Append(character);
+            }
+        }
+
+        normalized = builder?.ToString() ?? value;
+        return true;
+    }
 }
 
-internal static class CopyDataMessenger
+internal static class CopyDataMessageReader
 {
     public const int WmCopyData = 0x004A;
+    private const int MaximumByteCount = 2 * 1024 * 1024;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct CopyDataStruct
@@ -42,62 +154,6 @@ internal static class CopyDataMessenger
         public nint DataId;
         public int ByteCount;
         public nint DataPointer;
-    }
-
-    [Flags]
-    private enum SendMessageTimeoutFlags : uint
-    {
-        AbortIfHung = 0x0002,
-        Block = 0x0001
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint SendMessageTimeout(
-        nint windowHandle,
-        uint message,
-        nint wParam,
-        ref CopyDataStruct lParam,
-        SendMessageTimeoutFlags flags,
-        uint timeoutMilliseconds,
-        out nint result);
-
-    [DllImport("user32.dll")]
-    internal static extern bool IsWindow(nint windowHandle);
-
-    public static bool Send(nint targetHwnd, nint senderHwnd, string payload)
-    {
-        if (targetHwnd == 0 || !IsWindow(targetHwnd))
-        {
-            return false;
-        }
-
-        var bytes = Encoding.Unicode.GetBytes(payload + '\0');
-        var dataPointer = Marshal.AllocHGlobal(bytes.Length);
-        try
-        {
-            Marshal.Copy(bytes, 0, dataPointer, bytes.Length);
-            var copyData = new CopyDataStruct
-            {
-                DataId = 1,
-                ByteCount = bytes.Length,
-                DataPointer = dataPointer
-            };
-
-            var sendResult = SendMessageTimeout(
-                targetHwnd,
-                WmCopyData,
-                senderHwnd,
-                ref copyData,
-                SendMessageTimeoutFlags.AbortIfHung | SendMessageTimeoutFlags.Block,
-                1500,
-                out _);
-
-            return sendResult != 0;
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(dataPointer);
-        }
     }
 
     public static string Read(nint lParam)
@@ -108,58 +164,15 @@ internal static class CopyDataMessenger
         }
 
         var copyData = Marshal.PtrToStructure<CopyDataStruct>(lParam);
-        if (copyData.DataPointer == 0 || copyData.ByteCount <= 1)
+        if (copyData.DataPointer == 0 ||
+            copyData.ByteCount <= 1 ||
+            copyData.ByteCount > MaximumByteCount ||
+            copyData.ByteCount % sizeof(char) != 0)
         {
             return string.Empty;
         }
 
-        var characterCount = Math.Max(0, copyData.ByteCount / 2 - 1);
+        var characterCount = Math.Max(0, copyData.ByteCount / sizeof(char) - 1);
         return Marshal.PtrToStringUni(copyData.DataPointer, characterCount) ?? string.Empty;
-    }
-}
-
-
-internal static class EngineWindowLocator
-{
-    private delegate bool EnumWindowsCallback(nint hwnd, nint lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsCallback callback, nint lParam);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(nint hwnd, StringBuilder className, int maxCount);
-
-    public static nint FindAutoHotkeyMainWindow(int processId)
-    {
-        if (processId <= 0)
-        {
-            return 0;
-        }
-
-        nint match = 0;
-
-        EnumWindows((hwnd, unusedParameter) =>
-        {
-            GetWindowThreadProcessId(hwnd, out var windowProcessId);
-            if (windowProcessId != (uint)processId)
-            {
-                return true;
-            }
-
-            var className = new StringBuilder(128);
-            GetClassName(hwnd, className, className.Capacity);
-            if (className.ToString().Equals("AutoHotkey", StringComparison.OrdinalIgnoreCase))
-            {
-                match = hwnd;
-                return false;
-            }
-
-            return true;
-        }, nint.Zero);
-
-        return match;
     }
 }

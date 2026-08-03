@@ -17,13 +17,6 @@ SendMode Input
 SetWorkingDir %A_ScriptDir%
 Process, Priority, , H
 
-; Match the source behavior when the game itself is elevated.
-if !A_IsAdmin
-{
-    Run *RunAs "%A_ScriptFullPath%"
-    ExitApp
-}
-
 ; ==============================================================================
 ; Standalone extraction: Skirk 9N2 2N5 N3
 ; Source mode: SkirkMacroEnabled = 1 (60 FPS / C0)

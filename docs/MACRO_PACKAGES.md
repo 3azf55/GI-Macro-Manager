@@ -117,7 +117,7 @@ Supported `Tag` values are:
 TESTING
 ```
 
-An explicit tag selected in the import form takes precedence.
+The import form defaults to **Use exported tag automatically**, so FPS and TESTING metadata travel with a Macro Manager export. Selecting an explicit tag takes precedence; selecting **None** intentionally removes the exported tag.
 
 ## External dependencies
 

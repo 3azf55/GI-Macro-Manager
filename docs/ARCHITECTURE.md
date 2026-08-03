@@ -7,7 +7,7 @@
 The AutoHotkey v1 engine owns:
 
 - dynamic catalog loading;
-- managed hotkey registration;
+- game-window-scoped hotkey registration;
 - Trigger down/up handling;
 - child macro process lifecycle;
 - input cleanup through `ReleaseAll()`;
@@ -70,9 +70,13 @@ and runs input cleanup.
 4. Verify the optional SHA-256 digest and safely extract the archive.
 5. Merge the installed macro registry with the release registry.
 6. Start an external PowerShell installer after the UI and engine exit.
-7. Replace runtime files and restart `UMM.Engine.ahk`.
+7. Build and validate a complete sibling installation directory.
+8. Activate it through a same-volume directory rename, restoring the previous directory if activation fails.
+9. Restart `UMM.Engine.ahk`; its guarded startup policy keeps the engine and UI at Administrator integrity.
 
 The WebView2 About page communicates directly with the C# host for update actions; update commands are not forwarded to the AutoHotkey engine.
+
+WebView commands pass through an explicit action/field allowlist. The C# line protocol normalizes control characters and enforces payload limits, while the engine independently rejects malformed or unsupported commands.
 
 ## Source validation
 

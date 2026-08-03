@@ -34,7 +34,6 @@ internal static class Program
 
         Application.Run(
             new MainForm(
-                options.EngineHwnd,
                 options.EnginePid,
                 options.RootDirectory,
                 options.EnableDevTools,
@@ -69,11 +68,10 @@ internal static class Program
     }
 }
 
-internal sealed record CommandLineOptions(IntPtr EngineHwnd, int EnginePid, string RootDirectory, bool EnableDevTools)
+internal sealed record CommandLineOptions(int EnginePid, string RootDirectory, bool EnableDevTools)
 {
     public static CommandLineOptions Parse(string[] args)
     {
-        nint engineHwnd = 0;
         var enginePid = 0;
         var rootDirectory = AppContext.BaseDirectory;
         var enableDevTools = false;
@@ -81,14 +79,7 @@ internal sealed record CommandLineOptions(IntPtr EngineHwnd, int EnginePid, stri
         for (var index = 0; index < args.Length; index++)
         {
             var arg = args[index];
-            if (arg.Equals("--engine-hwnd", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length)
-            {
-                if (long.TryParse(args[++index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var rawHwnd))
-                {
-                    engineHwnd = (nint)rawHwnd;
-                }
-            }
-            else if (arg.Equals("--engine-pid", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length)
+            if (arg.Equals("--engine-pid", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length)
             {
                 _ = int.TryParse(args[++index], NumberStyles.Integer, CultureInfo.InvariantCulture, out enginePid);
             }
@@ -102,6 +93,6 @@ internal sealed record CommandLineOptions(IntPtr EngineHwnd, int EnginePid, stri
             }
         }
 
-        return new CommandLineOptions(engineHwnd, enginePid, rootDirectory, enableDevTools);
+        return new CommandLineOptions(enginePid, rootDirectory, enableDevTools);
     }
 }

@@ -156,7 +156,6 @@ internal sealed class GitHubUpdateService : IDisposable
         int enginePid,
         int uiPid)
     {
-        var enginePath = Path.Combine(installRoot, "UMM.Engine.ahk");
         var resultPath = GetUpdateResultPath();
 
         var startInfo = new ProcessStartInfo
@@ -182,8 +181,6 @@ internal sealed class GitHubUpdateService : IDisposable
         startInfo.ArgumentList.Add(enginePid.ToString());
         startInfo.ArgumentList.Add("-UiPid");
         startInfo.ArgumentList.Add(uiPid.ToString());
-        startInfo.ArgumentList.Add("-EnginePath");
-        startInfo.ArgumentList.Add(enginePath);
         startInfo.ArgumentList.Add("-UpdateRoot");
         startInfo.ArgumentList.Add(prepared.UpdateRoot);
         startInfo.ArgumentList.Add("-ResultPath");
@@ -527,7 +524,6 @@ param(
     [Parameter(Mandatory = $true)][string]$PayloadRoot,
     [int]$EnginePid = 0,
     [int]$UiPid = 0,
-    [Parameter(Mandatory = $true)][string]$EnginePath,
     [Parameter(Mandatory = $true)][string]$UpdateRoot,
     [Parameter(Mandatory = $true)][string]$ResultPath,
     [Parameter(Mandatory = $true)][string]$TargetVersion
@@ -556,15 +552,28 @@ function Wait-ForApplicationExit {
 }
 
 function Copy-WithRetry {
-    param(
-        [string]$Source,
-        [string]$Destination
-    )
+	param(
+		[string]$Source,
+		[string]$Destination
+	)
 
-    for ($attempt = 1; $attempt -le 12; $attempt++) {
-        try {
-            Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
-            return
+	$item = Get-Item -LiteralPath $Source -Force
+	if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+		throw "Update data must not contain symbolic links or junctions: $Source"
+	}
+
+	if ($item.PSIsContainer) {
+		New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+		Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+			Copy-WithRetry -Source $_.FullName -Destination (Join-Path $Destination $_.Name)
+		}
+		return
+	}
+
+	for ($attempt = 1; $attempt -le 12; $attempt++) {
+		try {
+			Copy-Item -LiteralPath $Source -Destination $Destination -Force
+			return
         }
         catch {
             if ($attempt -eq 12) {
@@ -574,6 +583,17 @@ function Copy-WithRetry {
             Start-Sleep -Milliseconds 750
         }
     }
+}
+
+function Test-RuntimeRoot {
+    param([string]$Root)
+
+    return (
+        (Test-Path -LiteralPath (Join-Path $Root "UMM.Engine.ahk") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $Root "UMM.UI.exe") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $Root "ui\index.html") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $Root "Macros\registry.ini") -PathType Leaf)
+    )
 }
 
 function Write-UpdateResult {
@@ -596,29 +616,48 @@ function Write-UpdateResult {
     [System.IO.File]::WriteAllText($ResultPath, $json, $utf8)
 }
 
-Wait-ForApplicationExit -ProcessId $UiPid
-Wait-ForApplicationExit -ProcessId $EnginePid
-Start-Sleep -Milliseconds 500
-
+$stageRoot = $null
+$rollbackRoot = $null
+$activationComplete = $false
+$installRootFull = $null
+$restartSucceeded = $false
 try {
-    if (-not (Test-Path $PayloadRoot)) {
-        throw "The prepared update payload no longer exists."
+    $directorySeparators = [char[]]@(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar)
+    $installRootFull = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd($directorySeparators)
+    $payloadRootFull = [System.IO.Path]::GetFullPath($PayloadRoot).TrimEnd($directorySeparators)
+    $installDriveRoot = [System.IO.Path]::GetPathRoot($installRootFull).TrimEnd($directorySeparators)
+    $installParent = Split-Path -Parent $installRootFull
+    $installName = Split-Path -Leaf $installRootFull
+
+    if ([string]::IsNullOrWhiteSpace($installName) -or
+        $installRootFull -eq $installDriveRoot -or
+        -not (Test-Path -LiteralPath $installParent -PathType Container)) {
+        throw "The installation root is unsafe for an update transaction."
     }
 
-    $backupRoot = Join-Path $env:LOCALAPPDATA (
-        "MacroManager\UpdateBackups\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    New-Item $backupRoot -ItemType Directory -Force | Out-Null
-
-    $settingsPath = Join-Path $InstallRoot "settings.ini"
-    if (Test-Path $settingsPath) {
-        Copy-Item $settingsPath $backupRoot -Force
+    if (-not (Test-RuntimeRoot -Root $installRootFull)) {
+        throw "The current installation is not a complete runtime package."
     }
 
-    $registryPath = Join-Path $InstallRoot "Macros\registry.ini"
-    if (Test-Path $registryPath) {
-        $registryBackup = Join-Path $backupRoot "registry.ini"
-        Copy-Item $registryPath $registryBackup -Force
+    if (-not (Test-RuntimeRoot -Root $payloadRootFull)) {
+        throw "The prepared update payload is incomplete."
     }
+
+    Wait-ForApplicationExit -ProcessId $UiPid
+    Wait-ForApplicationExit -ProcessId $EnginePid
+    Start-Sleep -Milliseconds 500
+
+    $transactionId = [Guid]::NewGuid().ToString("N")
+    $stageRoot = Join-Path $installParent ("." + $installName + ".update." + $transactionId)
+    $rollbackRoot = Join-Path $installParent ("." + $installName + ".rollback." + $transactionId)
+
+    if ((Test-Path -LiteralPath $stageRoot) -or (Test-Path -LiteralPath $rollbackRoot)) {
+        throw "The update transaction paths already exist."
+    }
+
+    New-Item -Path $stageRoot -ItemType Directory | Out-Null
 
     $preservedNames = @(
         "settings.ini",
@@ -626,27 +665,115 @@ try {
         "UMM.UI.connection.log"
     )
 
-    Get-ChildItem -LiteralPath $PayloadRoot -Force | ForEach-Object {
+    # Build a clean candidate beside the live installation. Preserve only
+    # local settings/bridge data and installed user macro folders, then overlay
+    # the release payload so removed application files do not survive forever.
+	foreach ($preservedName in $preservedNames) {
+		$preservedPath = Join-Path $installRootFull $preservedName
+		if (Test-Path -LiteralPath $preservedPath) {
+			Copy-WithRetry -Source $preservedPath -Destination (Join-Path $stageRoot $preservedName)
+		}
+	}
+
+    $installedUserMacros = Join-Path $installRootFull "Macros\User"
+    if (Test-Path -LiteralPath $installedUserMacros -PathType Container) {
+        $stageUserMacros = Join-Path $stageRoot "Macros\User"
+        New-Item -Path $stageUserMacros -ItemType Directory -Force | Out-Null
+		Get-ChildItem -LiteralPath $installedUserMacros -Force |
+			Where-Object { $_.Name -ne ".trash" } |
+			ForEach-Object {
+				Copy-WithRetry -Source $_.FullName -Destination (Join-Path $stageUserMacros $_.Name)
+			}
+    }
+
+    Get-ChildItem -LiteralPath $payloadRootFull -Force | ForEach-Object {
         if ($preservedNames -contains $_.Name) {
             return
         }
 
-        Copy-WithRetry -Source $_.FullName -Destination $InstallRoot
+		Copy-WithRetry -Source $_.FullName -Destination (Join-Path $stageRoot $_.Name)
+	}
+
+    if (-not (Test-RuntimeRoot -Root $stageRoot)) {
+        throw "The staged installation failed runtime validation."
+    }
+
+    $backupRoot = Join-Path $env:LOCALAPPDATA (
+        "MacroManager\UpdateBackups\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    New-Item $backupRoot -ItemType Directory -Force | Out-Null
+
+    $settingsPath = Join-Path $installRootFull "settings.ini"
+    if (Test-Path $settingsPath) {
+        Copy-Item $settingsPath $backupRoot -Force
+    }
+
+    $registryPath = Join-Path $installRootFull "Macros\registry.ini"
+    if (Test-Path $registryPath) {
+        $registryBackup = Join-Path $backupRoot "registry.ini"
+        Copy-Item $registryPath $registryBackup -Force
+    }
+
+    # Both directories are on the same volume. Activation consists only of
+    # directory renames; any failure restores the original name immediately.
+    Set-Location -LiteralPath $installParent
+    Move-Item -LiteralPath $installRootFull -Destination $rollbackRoot
+    try {
+        Move-Item -LiteralPath $stageRoot -Destination $installRootFull
+        $activationComplete = $true
+        $stageRoot = $null
+    }
+    catch {
+        Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull
+        $rollbackRoot = $null
+        throw
     }
 
     Write-UpdateResult -Status "success" -Message "Macro Manager was updated successfully."
 }
 catch {
+    if (-not $activationComplete -and
+        $null -ne $rollbackRoot -and
+        (Test-Path -LiteralPath $rollbackRoot) -and
+        -not (Test-Path -LiteralPath $installRootFull)) {
+        Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull -ErrorAction SilentlyContinue
+        $rollbackRoot = $null
+    }
+
     Write-UpdateResult -Status "error" -Message $_.Exception.Message
 }
 finally {
-    if (Test-Path $EnginePath) {
-        Start-Process -FilePath $EnginePath -WorkingDirectory $InstallRoot
+    if (-not [string]::IsNullOrWhiteSpace($installRootFull)) {
+        $enginePathAfterUpdate = Join-Path $installRootFull "UMM.Engine.ahk"
+        if (Test-Path -LiteralPath $enginePathAfterUpdate -PathType Leaf) {
+            try {
+                Start-Process -FilePath $enginePathAfterUpdate -WorkingDirectory $installRootFull
+                $restartSucceeded = $true
+            }
+            catch {
+                Write-UpdateResult -Status "error" -Message (
+                    "The update was applied, but Macro Manager could not restart: " + $_.Exception.Message)
+            }
+        }
+    }
+
+    if ($activationComplete -and $restartSucceeded -and $null -ne $rollbackRoot -and (Test-Path -LiteralPath $rollbackRoot)) {
+        Remove-Item -LiteralPath $rollbackRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $stageRoot -and (Test-Path -LiteralPath $stageRoot)) {
+        Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     Start-Sleep -Seconds 2
-    Remove-Item $UpdateRoot -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
+    try {
+        $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+        $updateRootFull = [System.IO.Path]::GetFullPath($UpdateRoot)
+        if ($updateRootFull.StartsWith($temporaryRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $updateRootFull -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+    }
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 }
 """;
 

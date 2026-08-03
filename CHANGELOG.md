@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.7.3
+
+- Added a one-time, staged entrance animation when the interface opens.
+- Kept the entrance animation separate from page and theme transitions and disabled it when reduced motion is requested.
+
+## v1.7.2
+
+- Fixed every interface action being rejected by removing an AutoHotkey v1 text-level NUL check that treated `Chr(0)` as an empty search value.
+- Kept NUL-byte protection by validating command files as raw bytes before decoding them as UTF-8.
+- Added source-validation guards so CI rejects the broken text-level NUL pattern if it is reintroduced.
+
+## v1.7.1
+
+- Fixed valid UI bridge commands being rejected on startup by replacing the AutoHotkey v1 control-character regex with a deterministic character check and tolerating UTF-8 BOM input.
+- Prevented engine errors from creating an endless `error -> requestState -> error` notification loop.
+- Added stable error IDs, duplicate-toast suppression, a state-request cooldown, and a cap on simultaneously visible notifications.
+- Restored forced Administrator relaunch through UAC with a `/restart` guard that prevents repeated elevation attempts.
+
+## v1.7.0
+
+- Added a smooth, reduced-motion-aware transition between dark and light themes.
+- Scoped all managed hotkeys to the selected game executable and stop active input when the game loses focus.
+- Removed automatic Administrator elevation from the engine and bundled Skirk macro.
+- Replaced in-place updater copying with a validated staged directory swap and rollback.
+- Added a global command allowlist, payload limits, and centralized line-protocol normalization.
+- Made exported FPS and TESTING tags inherit automatically unless the importer explicitly selects None.
+- Made macro reordering a single atomic registry update and forced the UI to accept the engine result after rollback.
+- Prevented deletion of the last macro for each character in both the UI and engine.
+- Removed unused bridge, engine, and JavaScript helpers and synchronized every inlined runtime copy.
+- Consolidated Discord release notification into the release workflow and expanded CI consistency checks.
+
 ## v1.6.6
 
 - Reserved the missing `S` gameplay key from application hotkey assignment.

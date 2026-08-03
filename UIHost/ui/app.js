@@ -40,7 +40,7 @@ const translations = {
   activeCharacter: "ACTIVE CHARACTER",
   inputSettings: "INPUT SETTINGS",
   hotkeysTitle: "Hotkeys",
-  hotkeyInfo: "Gameplay keys used by the macros cannot be assigned. Duplicate hotkeys are also rejected by the engine.",
+  hotkeyInfo: "Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.",
   launchSettings: "LAUNCH SETTINGS",
   startupTitle: "Startup application",
   selectedExecutable: "SELECTED EXECUTABLE",
@@ -59,7 +59,7 @@ const translations = {
   builtLabel: "Built",
   captureHotkey: "CAPTURE HOTKEY",
   pressKey: "Press a key",
-  hotkeyModalHelp: "Press Escape to cancel. Mouse side buttons can still be configured from the legacy tray capture if needed.",
+  hotkeyModalHelp: "Press a keyboard key or a mouse side button. Press Escape to cancel.",
   buildInformation: "Build information",
   openGithub: "Open GitHub project",
   openDiscord: "Open Discord community",
@@ -119,7 +119,6 @@ const hotkeyCatalog = [
 ];
 
 let state = {
-  connected: false,
   macroEnabled: false,
   soundsEnabled: true,
   macroRunning: false,
@@ -135,8 +134,7 @@ let state = {
   modeToggleKey: "—",
   autoLaunchPath: "",
   autoLaunchEnabled: true,
-  version: "—",
-  isAdmin: false
+  version: "—"
 };
 
 let captureTarget = null;
@@ -145,16 +143,69 @@ const COMBO_LONG_PRESS_MS = 450;
 const COMBO_PRESS_MOVE_TOLERANCE = 8;
 let comboPressState = null;
 let suppressComboClickUntil = 0;
+let stateRequestPending = false;
+let stateRequestTimer = 0;
+let lastLegacyErrorMessage = "";
+let lastLegacyErrorAt = 0;
+let lastToastSignature = "";
+let lastToastAt = 0;
+
+const STATE_REQUEST_COOLDOWN_MS = 1200;
+const DUPLICATE_TOAST_WINDOW_MS = 1200;
+const MAX_VISIBLE_TOASTS = 3;
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
+function finishInterfaceEntrance() {
+  const root = document.documentElement;
+  if (!root.classList.contains("ui-entering")) return;
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    root.classList.remove("ui-entering");
+    return;
+  }
+
+  const shell = $(".app-shell");
+  const clearEntranceState = event => {
+    if (event && (event.target !== shell || event.animationName !== "interface-shell-enter")) return;
+    shell?.removeEventListener("animationend", clearEntranceState);
+    root.classList.remove("ui-entering");
+  };
+
+  shell?.addEventListener("animationend", clearEntranceState);
+  window.setTimeout(() => clearEntranceState(), 900);
+}
+
 function post(action, payload = {}) {
   if (!bridge) {
     showToast(t("webviewUnavailable"), true);
-    return;
+    return false;
   }
   bridge.postMessage({ action, ...payload });
+  return true;
+}
+
+function requestState() {
+  if (stateRequestPending) return;
+
+  stateRequestPending = true;
+  if (!post("requestState")) {
+    stateRequestPending = false;
+    return;
+  }
+
+  window.clearTimeout(stateRequestTimer);
+  stateRequestTimer = window.setTimeout(() => {
+    stateRequestPending = false;
+    stateRequestTimer = 0;
+  }, STATE_REQUEST_COOLDOWN_MS);
+}
+
+function completeStateRequest() {
+  stateRequestPending = false;
+  window.clearTimeout(stateRequestTimer);
+  stateRequestTimer = 0;
 }
 
 function boolValue(value) {
@@ -205,8 +256,39 @@ function shouldShowNotice(message) {
   return true;
 }
 
+const LAST_ERROR_ID_KEY = "umm.lastErrorId";
+
+function shouldShowError(message) {
+  const errorId = String(message.errorId || "").trim();
+
+  if (errorId) {
+    try {
+      const lastErrorId = localStorage.getItem(LAST_ERROR_ID_KEY);
+      if (lastErrorId === errorId) return false;
+      localStorage.setItem(LAST_ERROR_ID_KEY, errorId);
+      return true;
+    } catch {
+      return isFreshNotice(message);
+    }
+  }
+
+  // Older engines do not attach an error ID. Suppress only an immediate
+  // duplicate delivered through both WM_COPYDATA and bridge/error.txt.
+  const errorMessage = String(message.message || t("engineRejected"));
+  const now = Date.now();
+  if (errorMessage === lastLegacyErrorMessage && now - lastLegacyErrorAt <= DUPLICATE_TOAST_WINDOW_MS) {
+    return false;
+  }
+
+  lastLegacyErrorMessage = errorMessage;
+  lastLegacyErrorAt = now;
+  return true;
+}
+
 function applyMessage(message) {
   if (message.type === "state") {
+    completeStateRequest();
+
     if (message.catalogJson && message.catalogJson !== catalogJsonCache) {
       try {
         const parsedCatalog = JSON.parse(message.catalogJson);
@@ -228,12 +310,10 @@ function applyMessage(message) {
     state = {
       ...state,
       ...message,
-      connected: boolValue(message.connected),
       macroEnabled: boolValue(message.macroEnabled),
       soundsEnabled: boolValue(message.soundsEnabled),
       macroRunning: boolValue(message.macroRunning),
-      autoLaunchEnabled: boolValue(message.autoLaunchEnabled),
-      isAdmin: boolValue(message.isAdmin)
+      autoLaunchEnabled: boolValue(message.autoLaunchEnabled)
     };
     render();
     return;
@@ -270,8 +350,13 @@ function applyMessage(message) {
   }
 
   if (message.type === "error") {
-    showToast(message.message || t("engineRejected"), true);
-    post("requestState");
+    if (shouldShowError(message)) {
+      showToast(message.message || t("engineRejected"), true);
+    }
+    if (message.errorCode !== "INVALID_BRIDGE_PAYLOAD" &&
+        message.errorCode !== "UNSUPPORTED_BRIDGE_ACTION") {
+      requestState();
+    }
     return;
   }
 
@@ -281,14 +366,10 @@ function applyMessage(message) {
     if (shouldShowNotice(message)) {
       showToast(message.message || "Done");
     }
-    post("requestState");
+    requestState();
     return;
   }
 
-  if (message.type === "connection") {
-    state.connected = boolValue(message.connected);
-    state.connectionStatus = message.status || (state.connected ? "connected" : "disconnected");
-  }
 }
 
 function render() {
@@ -528,19 +609,6 @@ function animateComboDrop(button) {
   );
 }
 
-function updateLocalComboOrder(character, orderedIds) {
-  const characterEntry = characterCatalog[character];
-  if (!characterEntry) return;
-
-  const comboById = new Map(
-    characterEntry.combos.map(combo => [combo.value, combo])
-  );
-
-  characterEntry.combos = orderedIds
-    .map(comboId => comboById.get(comboId))
-    .filter(Boolean);
-}
-
 function cancelPendingComboPress() {
   if (!comboPressState || comboPressState.active) return;
 
@@ -694,7 +762,10 @@ function finishComboReorder(event, cancelled = false) {
   } else {
     const newOrder = comboOrderForCurrentCharacter();
     if (newOrder.join("|") !== press.originalOrder.join("|")) {
-      updateLocalComboOrder(press.character, newOrder);
+      // Force the authoritative engine response to rebuild the list. This
+      // restores the original order when persistence fails and confirms the
+      // new order only after the engine has saved it.
+      catalogJsonCache = "";
       post("reorderMacros", {
         character: press.character,
         comboIds: newOrder.join("|")
@@ -803,7 +874,9 @@ function renderCharacters() {
   const selectedCombo = getSelectedCombo();
   const hasSelectedCombo = Boolean(selectedCombo);
   const canManageSelected = hasSelectedCombo && !state.macroRunning;
-  const canDelete = canManageSelected && !selectedCombo.builtIn;
+  const characterMacroCount = characterCatalog[state.character]?.combos?.length || 0;
+  const isLastCharacterMacro = characterMacroCount <= 1;
+  const canDelete = canManageSelected && !selectedCombo.builtIn && !isLastCharacterMacro;
 
   const exportMacroButton = $("#exportMacroButton");
   exportMacroButton.disabled = !canManageSelected;
@@ -820,10 +893,16 @@ function renderCharacters() {
   deleteMacroButton.disabled = !canDelete;
   deleteMacroButton.title = canDelete
     ? `Delete ${selectedCombo.label}`
-    : "Release the trigger before deleting this macro.";
+    : isLastCharacterMacro
+      ? "Import another macro for this character before deleting its last macro."
+      : "Release the trigger before deleting this macro.";
   deleteMacroButton.setAttribute(
     "aria-label",
-    canDelete ? `Delete ${selectedCombo.label}` : "Delete selected macro"
+    canDelete
+      ? `Delete ${selectedCombo.label}`
+      : isLastCharacterMacro
+        ? "The final macro for this character cannot be deleted"
+        : "Delete selected macro"
   );
 
   $$(".combo-option").forEach(button => {
@@ -1011,8 +1090,35 @@ function applyTheme(theme, persist = true) {
 }
 
 function toggleTheme() {
+  const root = document.documentElement;
+  if (root.classList.contains("theme-transitioning")) return;
+
   const current = normalizeTheme(document.documentElement.dataset.theme);
-  applyTheme(current === "dark" ? "light" : "dark");
+  const nextTheme = current === "dark" ? "light" : "dark";
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const commitTheme = () => applyTheme(nextTheme);
+
+  if (reducedMotion) {
+    commitTheme();
+    return;
+  }
+
+  root.classList.add("theme-transitioning");
+  const finishTransition = () => {
+    root.classList.remove("theme-transitioning", "theme-transition-fallback");
+  };
+
+  if (typeof document.startViewTransition === "function") {
+    const transition = document.startViewTransition(commitTheme);
+    transition.finished.then(finishTransition, finishTransition);
+    return;
+  }
+
+  root.classList.add("theme-transition-fallback");
+  requestAnimationFrame(() => {
+    commitTheme();
+    window.setTimeout(finishTransition, 360);
+  });
 }
 
 function openCommunityLink(name) {
@@ -1098,17 +1204,6 @@ function mapKeyboardEvent(event) {
   return numpadMap[event.code] || null;
 }
 
-function fillSelect(select, values, selectedValue = "") {
-  select.innerHTML = "";
-  values.forEach(value => {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value;
-    option.selected = value === selectedValue;
-    select.appendChild(option);
-  });
-}
-
 function openMacroImport() {
   if (state.macroRunning) {
     showToast("Release the trigger before importing a macro.", true);
@@ -1125,7 +1220,7 @@ function openMacroImport() {
   $("#macroImportCharacter").textContent = macroImportCharacter;
   $("#macroComboName").value = "";
   $("#macroTooltip").value = "";
-  $("#macroTag").value = "";
+  $("#macroTag").value = "AUTO";
   $("#macroImportModal").classList.remove("hidden");
   setTimeout(() => $("#macroComboName").focus(), 0);
 }
@@ -1169,6 +1264,12 @@ function submitMacroImport(event) {
 function openMacroDelete(combo) {
   if (!combo || combo.builtIn) return;
 
+  const macroCount = characterCatalog[state.character]?.combos?.length || 0;
+  if (macroCount <= 1) {
+    showToast("Import another macro for this character before deleting its last macro.", true);
+    return;
+  }
+
   macroDeleteTarget = {
     comboId: combo.value,
     name: combo.label,
@@ -1195,10 +1296,24 @@ function confirmMacroDelete() {
 }
 
 function showToast(message, error = false) {
+  const signature = `${error ? "error" : "notice"}:${message}`;
+  const now = Date.now();
+  if (signature === lastToastSignature && now - lastToastAt <= DUPLICATE_TOAST_WINDOW_MS) {
+    return;
+  }
+
+  lastToastSignature = signature;
+  lastToastAt = now;
+
+  const container = $("#toastContainer");
+  while (container.children.length >= MAX_VISIBLE_TOASTS) {
+    container.firstElementChild?.remove();
+  }
+
   const toast = document.createElement("div");
   toast.className = `toast${error ? " error" : ""}`;
   toast.textContent = message;
-  $("#toastContainer").appendChild(toast);
+  container.appendChild(toast);
   setTimeout(() => toast.remove(), 3600);
 }
 
@@ -1256,6 +1371,16 @@ $('#viewReleaseButton').addEventListener('click', () => {
   post('openExternal', { url: updateState.releaseUrl || releasesUrl });
 });
 $('#cancelHotkeyButton').addEventListener('click', endHotkeyCapture);
+$('#hotkeyModal').addEventListener('pointerdown', event => {
+  if (!captureTarget || (event.button !== 3 && event.button !== 4)) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  const mappedKey = event.button === 3 ? 'XButton1' : 'XButton2';
+  $('#capturedKey').textContent = mappedKey;
+  post('setHotkey', { target: captureTarget.target, value: mappedKey });
+  endHotkeyCapture();
+});
 $('#addMacroButton').addEventListener('click', openMacroImport);
 $('#exportMacroButton').addEventListener('click', () => {
   const selectedCombo = getSelectedCombo();
@@ -1343,8 +1468,9 @@ applyTheme(savedTheme || (systemPrefersLight ? 'light' : 'dark'), false);
 document.documentElement.lang = "en";
 document.documentElement.dir = "ltr";
 applyStaticTranslations();
+finishInterfaceEntrance();
 loadBuildInfo();
 
 bridge?.addEventListener('message', event => applyMessage(event.data));
-post('requestState');
+requestState();
 render();

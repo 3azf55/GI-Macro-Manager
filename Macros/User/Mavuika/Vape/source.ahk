@@ -20,6 +20,7 @@ Global MacroTriggerKey := ""
 Global LState := false
 Global RState := false
 Global QState := false
+Global FState := false
 Global EState := false
 Global WState := false
 Global ShiftState := false

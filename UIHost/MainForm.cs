@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
@@ -13,6 +14,34 @@ public sealed class MainForm : Form
 
     private const int FixedClientWidth = 1120;
     private const int FixedClientHeight = 720;
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>>
+        WebEngineCommandSchema = new Dictionary<string, IReadOnlyDictionary<string, int>>(
+            StringComparer.Ordinal)
+        {
+            ["requestState"] = CommandFields(),
+            ["setCharacter"] = CommandFields(("value", 50)),
+            ["setCombo"] = CommandFields(("value", 120)),
+            ["setAppMode"] = CommandFields(("value", 32)),
+            ["setMacroEnabled"] = CommandFields(("value", 8)),
+            ["setSoundsEnabled"] = CommandFields(("value", 8)),
+            ["setSkipStopMode"] = CommandFields(("value", 16)),
+            ["importMacro"] = CommandFields(
+                ("character", 50),
+                ("comboName", 60),
+                ("tooltip", 80),
+                ("tag", 16)),
+            ["deleteMacro"] = CommandFields(("comboId", 120)),
+            ["exportMacro"] = CommandFields(("comboId", 120)),
+            ["reorderMacros"] = CommandFields(("character", 50), ("comboIds", 16 * 1024)),
+            ["setHotkey"] = CommandFields(("target", 32), ("value", 32)),
+            ["resetHotkeys"] = CommandFields(),
+            ["setAutoLaunchEnabled"] = CommandFields(("value", 8)),
+            ["startGame"] = CommandFields(),
+            ["clearAutoLaunch"] = CommandFields(),
+            ["reloadEngine"] = CommandFields(),
+            ["exitEngine"] = CommandFields()
+        };
 
     private readonly WebView2 _webView = new();
     private readonly string _rootDirectory;
@@ -31,7 +60,6 @@ public sealed class MainForm : Form
     private readonly GitHubUpdateService _updateService = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private UpdateCheckResult? _availableUpdate;
-    private nint _engineHwnd;
     private bool _webReady;
     private bool _engineConnected;
     private bool _windowPlacementReady;
@@ -42,15 +70,13 @@ public sealed class MainForm : Form
     private DateTime _lastErrorWriteUtc = DateTime.MinValue;
 
     public MainForm(
-        nint engineHwnd,
         int enginePid,
         string rootDirectory,
         bool enableDevTools,
         EventWaitHandle activationEvent)
     {
-        _engineHwnd = engineHwnd;
         _enginePid = enginePid;
-        _rootDirectory = rootDirectory;
+        _rootDirectory = Path.GetFullPath(rootDirectory);
         _enableDevTools = enableDevTools;
         _activationEvent = activationEvent;
 
@@ -117,14 +143,14 @@ public sealed class MainForm : Form
         };
         FormClosing += OnFormClosing;
 
-        Log($"UI started. Engine HWND argument={_engineHwnd}; Engine PID argument={_enginePid}; UI HWND={Handle}.");
+        Log($"UI started. Engine PID argument={_enginePid}; UI HWND={Handle}.");
     }
 
     protected override void WndProc(ref Message message)
     {
-        if (message.Msg == CopyDataMessenger.WmCopyData)
+        if (message.Msg == CopyDataMessageReader.WmCopyData)
         {
-            var payload = CopyDataMessenger.Read(message.LParam);
+            var payload = CopyDataMessageReader.Read(message.LParam);
             if (!string.IsNullOrWhiteSpace(payload))
             {
                 BeginInvoke(new Action(() => HandleEnginePayload(payload)));
@@ -188,12 +214,6 @@ public sealed class MainForm : Form
                 }
 
                 _webReady = true;
-                PostToWeb(new Dictionary<string, string>
-                {
-                    ["type"] = "connection",
-                    ["connected"] = "0",
-                    ["status"] = "connecting"
-                });
                 BeginFileBridge();
                 PostPreviousUpdateResult();
                 if (ShouldRunAutomaticUpdateCheck())
@@ -233,18 +253,34 @@ public sealed class MainForm : Form
 
         try
         {
-            using var document = JsonDocument.Parse(args.WebMessageAsJson);
+            var rawMessage = args.WebMessageAsJson;
+            if (string.IsNullOrEmpty(rawMessage) ||
+                rawMessage.Length > LineProtocol.MaximumPayloadLength)
+            {
+                return;
+            }
+
+            using var document = JsonDocument.Parse(rawMessage);
             var root = document.RootElement;
-            if (!root.TryGetProperty("action", out var actionElement))
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("action", out var actionElement) ||
+                actionElement.ValueKind != JsonValueKind.String)
             {
                 return;
             }
 
             var action = actionElement.GetString() ?? string.Empty;
+            if (!LineProtocol.TryNormalizeCommandValue(action, 64, out var normalizedAction) ||
+                !normalizedAction.Equals(action, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            action = normalizedAction;
             switch (action)
             {
                 case "windowClose":
-                            Close();
+                    Close();
                     return;
                 case "windowDrag":
                     BeginWindowDrag();
@@ -263,16 +299,14 @@ public sealed class MainForm : Form
                     return;
             }
 
-            var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var property in root.EnumerateObject())
+            if (!TryBuildWebEngineCommand(root, action, out var values))
             {
-                values[property.Name] = property.Value.ValueKind switch
+                PostToWeb(new Dictionary<string, string>
                 {
-                    JsonValueKind.True => "1",
-                    JsonValueKind.False => "0",
-                    JsonValueKind.Null => string.Empty,
-                    _ => property.Value.ToString()
-                };
+                    ["type"] = "error",
+                    ["message"] = "The interface command was rejected by the input policy."
+                });
+                return;
             }
 
             SendEngineCommand(action, values);
@@ -298,14 +332,67 @@ public sealed class MainForm : Form
         if (type.Equals("engineClosing", StringComparison.OrdinalIgnoreCase))
         {
             _engineConnected = false;
-            _engineHwnd = 0;
             Close();
             return;
         }
 
         _engineConnected = true;
-        Log($"Received optional WM_COPYDATA engine message type={type}; engine HWND={_engineHwnd}.");
+        Log($"Received optional WM_COPYDATA engine message type={type}.");
         PostToWeb(message);
+    }
+
+    private static IReadOnlyDictionary<string, int> CommandFields(
+        params (string Name, int MaximumLength)[] fields) =>
+        fields.ToDictionary(
+            field => field.Name,
+            field => field.MaximumLength,
+            StringComparer.Ordinal);
+
+    private static bool TryBuildWebEngineCommand(
+        JsonElement root,
+        string action,
+        out Dictionary<string, string?> values)
+    {
+        values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (!WebEngineCommandSchema.TryGetValue(action, out var allowedFields))
+        {
+            return false;
+        }
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.NameEquals("action"))
+            {
+                continue;
+            }
+
+            if (!allowedFields.TryGetValue(property.Name, out var maximumLength) ||
+                property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array or JsonValueKind.Undefined)
+            {
+                return false;
+            }
+
+            var rawValue = property.Value.ValueKind switch
+            {
+                JsonValueKind.True => "1",
+                JsonValueKind.False => "0",
+                JsonValueKind.Null => string.Empty,
+                JsonValueKind.String => property.Value.GetString() ?? string.Empty,
+                _ => property.Value.GetRawText()
+            };
+
+            if (!LineProtocol.TryNormalizeCommandValue(rawValue, maximumLength, out var normalizedValue))
+            {
+                return false;
+            }
+
+            if (!values.TryAdd(property.Name, normalizedValue))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void PostToWeb(IReadOnlyDictionary<string, string> message)
@@ -331,9 +418,7 @@ public sealed class MainForm : Form
             ? File.GetLastWriteTimeUtc(_errorFile)
             : DateTime.MinValue;
 
-        PostConnectionStatus("connecting");
         SendEngineCommand("uiReady", reportFailure: false);
-        SendEngineCommand("requestState", reportFailure: false);
 
         PollFileBridge();
         _bridgeTimer.Start();
@@ -358,13 +443,7 @@ public sealed class MainForm : Form
                 _engineConnected = false;
             }
 
-            PostConnectionStatus("disconnected");
             return;
-        }
-
-        if (!_engineConnected)
-        {
-            PostConnectionStatus(File.Exists(_stateFile) ? "connecting" : "connecting");
         }
     }
 
@@ -409,7 +488,6 @@ public sealed class MainForm : Form
             _macroRunning = state.TryGetValue("macroRunning", out var macroRunningText) &&
                 (macroRunningText.Equals("1", StringComparison.OrdinalIgnoreCase) ||
                  macroRunningText.Equals("true", StringComparison.OrdinalIgnoreCase));
-            state["connected"] = "1";
             PostToWeb(state);
         }
         catch (IOException)
@@ -418,7 +496,7 @@ public sealed class MainForm : Form
         }
         catch (UnauthorizedAccessException)
         {
-            PostConnectionStatus("failed");
+            Log("The UI cannot read the engine state file.");
         }
     }
 
@@ -460,6 +538,11 @@ public sealed class MainForm : Form
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
+
+        if (stream.Length <= 0 || stream.Length > LineProtocol.MaximumPayloadLength)
+        {
+            return string.Empty;
+        }
 
         using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false), true);
         return reader.ReadToEnd();
@@ -527,27 +610,22 @@ public sealed class MainForm : Form
         }
         catch (Exception exception) when (
             exception is IOException ||
-            exception is UnauthorizedAccessException)
+            exception is UnauthorizedAccessException ||
+            exception is InvalidDataException)
         {
             Log($"Failed to queue command action={action}: {exception.Message}");
 
             if (reportFailure)
             {
-                PostConnectionStatus("failed");
+                PostToWeb(new Dictionary<string, string>
+                {
+                    ["type"] = "error",
+                    ["message"] = "The command could not be delivered to the macro engine."
+                });
             }
 
             return false;
         }
-    }
-
-    private void PostConnectionStatus(string status)
-    {
-        PostToWeb(new Dictionary<string, string>
-        {
-            ["type"] = "connection",
-            ["connected"] = _engineConnected ? "1" : "0",
-            ["status"] = _engineConnected ? "connected" : status
-        });
     }
 
     private void Log(string message)
@@ -1049,20 +1127,32 @@ public sealed class MainForm : Form
 
     private static void OpenExternal(JsonElement root)
     {
-        if (!root.TryGetProperty("url", out var urlElement))
+        if (!root.TryGetProperty("url", out var urlElement) ||
+            urlElement.ValueKind != JsonValueKind.String)
         {
             return;
         }
 
         var url = urlElement.GetString();
         if (string.IsNullOrWhiteSpace(url) ||
-            (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-             !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
+            !LineProtocol.TryNormalizeCommandValue(url, 2048, out var normalizedUrl) ||
+            !normalizedUrl.Equals(url, StringComparison.Ordinal) ||
+            !Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri) ||
+            !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
         {
             return;
         }
 
-        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception or InvalidOperationException)
+        {
+            // A missing/default browser must not terminate the UI host.
+        }
     }
 
 

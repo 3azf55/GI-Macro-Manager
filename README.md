@@ -12,7 +12,7 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - AutoHotkey v1 import with hotkey, `RunMacro()`, and auto-execute detection
 - Stable package names for imported macros
 - Add, export, delete, and reorder macro packages
-- Configurable, conflict-checked application hotkeys
+- Configurable, conflict-checked hotkeys active only while the selected game window is focused
 - Skip Dialogs mode and optional game launcher
 - GitHub release checks with download and installation support
 - System tray controls and Discord community access
@@ -59,7 +59,7 @@ dist\UMM.Engine.ahk
 Validate the source before submitting changes:
 
 ```powershell
-.\scripts\validate-source.ps1 -RequireNode
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-source.ps1 -RequireNode
 ```
 
 ## Macro Packages
@@ -90,7 +90,9 @@ For a technical overview, see [Architecture](docs/ARCHITECTURE.md).
 
 ## Security
 
-Imported AutoHotkey files are executable scripts and run with the current Windows user's permissions. Only import scripts from sources you trust and review their contents before running them.
+Imported AutoHotkey files are executable scripts. Macro Manager requests Administrator permission at startup, so imported macros inherit elevated access. Only import scripts from sources you trust and review their contents before running them.
+
+The engine performs one guarded UAC relaunch so it can interact consistently with games running at elevated integrity. If elevation is denied or still unavailable after the guarded restart, Macro Manager exits instead of relaunching repeatedly.
 
 Read the full [Security Policy](SECURITY.md).
 

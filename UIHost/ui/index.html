@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="ui-entering">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -157,7 +157,7 @@
           <button class="secondary-button" id="resetHotkeysButton">Reset defaults</button>
         </div>
         <div id="hotkeyGrid" class="hotkey-grid"></div>
-        <div class="info-banner" data-i18n="hotkeyInfo">Gameplay keys used by the macros cannot be assigned. Duplicate hotkeys are also rejected by the engine.</div>
+        <div class="info-banner" data-i18n="hotkeyInfo">Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.</div>
       </section>
 
       <section class="page" data-page-panel="startup">
@@ -255,7 +255,7 @@
       <span class="eyebrow" data-i18n="captureHotkey">CAPTURE HOTKEY</span>
       <h2 id="hotkeyModalTitle" data-i18n="pressKey">Press a key</h2>
       <div class="key-capture" id="capturedKey">…</div>
-      <p data-i18n="hotkeyModalHelp">Press Escape to cancel. Mouse side buttons can still be configured from the legacy tray capture if needed.</p>
+      <p data-i18n="hotkeyModalHelp">Press a keyboard key or a mouse side button. Press Escape to cancel.</p>
       <button class="secondary-button" id="cancelHotkeyButton">Cancel</button>
     </div>
   </div>
@@ -284,7 +284,8 @@
       <label class="import-field">
         <span>Tag <small>Optional</small></span>
         <select id="macroTag">
-          <option value="">None</option>
+          <option value="AUTO">Use exported tag automatically</option>
+          <option value="NONE">None</option>
           <option value="60 FPS">60 FPS</option>
           <option value="120 FPS">120 FPS</option>
           <option value="240 FPS">240 FPS</option>
@@ -308,7 +309,7 @@
         Remove <strong class="preserve-ltr" id="macroDeleteName">Macro</strong>
         from <strong class="preserve-ltr" id="macroDeleteCharacter">Character</strong>?
       </p>
-      <p class="delete-warning">Its macro folder and registry entry will be permanently deleted. This cannot be undone.</p>
+      <p class="delete-warning">Its macro folder and registry entry will be permanently deleted. The final macro for a character cannot be deleted.</p>
       <div class="import-actions">
         <button class="secondary-button" id="cancelMacroDeleteButton" type="button">Cancel</button>
         <button class="danger-button" id="confirmMacroDeleteButton" type="button">Delete</button>

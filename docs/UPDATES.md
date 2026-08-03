@@ -30,25 +30,25 @@ The repository includes:
 .github\workflows\release.yml
 ```
 
-Pushing a tag such as `v1.6.6` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
+Pushing a tag such as `v1.7.1` starts a Windows build, creates the required ZIP, and publishes or updates the matching GitHub Release.
 
 Before creating the tag, make sure these versions match:
 
 ```text
-UMM.Engine.ahk                 global AppVersion := "v1.6.6"
-UIHost\UMM.UI.csproj           <Version>1.6.6</Version>
-UIHost\ui\build-info.json      "version": "v1.6.6", "buildDate": null
+UMM.Engine.ahk                 global AppVersion := "v1.7.1"
+UIHost\UMM.UI.csproj           <Version>1.7.1</Version>
+UIHost\ui\build-info.json      "version": "v1.7.1", "buildDate": null
 ```
 
 Then run:
 
 ```powershell
 git add .
-git commit -m "Release v1.6.6"
+git commit -m "Release v1.7.1"
 git push
 
-git tag v1.6.6
-git push origin v1.6.6
+git tag v1.7.1
+git push origin v1.7.1
 ```
 
 The workflow runs the same source validator used by pull requests, then validates the tag against the engine and UI versions before building. The source `build-info.json` is a version template; the build script writes the actual date only into `dist`.
@@ -65,11 +65,15 @@ The updater:
 6. Extracts the ZIP with path traversal and size limits.
 7. Validates that the package is a complete runtime build.
 8. Merges the release catalog with the installed catalog.
-9. Closes Macro Manager, replaces application files, and restarts it.
+9. Builds and validates a complete candidate beside the live installation.
+10. Stops Macro Manager and activates the candidate with a same-volume directory swap.
+11. Restores the original directory automatically if activation fails, then restarts the engine.
 
 The catalog merge keeps custom macro sections and preserves the existing `Order` value for macros included in both catalogs.
 
-The update script also keeps `settings.ini`, the `bridge` directory, and extra custom macro folders that are not present in the release package.
+The update script also keeps `settings.ini`, the `bridge` directory, and extra custom macro folders that are not present in the release package. Application files are never copied directly over the running installation.
+
+The release workflow sends the Discord notification from the same workflow job chain after publishing. This avoids GitHub's rule that prevents a release created by `GITHUB_TOKEN` from triggering a separate `release` workflow.
 
 ## Manual workflow run
 

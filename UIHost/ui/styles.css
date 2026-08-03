@@ -23,6 +23,7 @@
   --surface-active: #2c3950;
   --outline: rgba(255, 255, 255, .08);
   --text: #f5f7fb;
+  --text-soft: #c7cfdd;
   --muted: #929bad;
   --primary: #8ea8ff;
   --primary-strong: #6f8eff;
@@ -42,6 +43,7 @@
   --surface-active: #c7d5f3;
   --outline: rgba(26, 39, 64, .22);
   --text: #101827;
+  --text-soft: #39485e;
   --muted: #4f5e73;
   --primary: #3458c7;
   --primary-strong: #294bb5;
@@ -49,6 +51,111 @@
   --success: #12633f;
   --danger: #a91f39;
   --shadow: 0 22px 60px rgba(35, 49, 76, .22);
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(.22, .78, .24, 1);
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) { animation-name: theme-fade-out; }
+::view-transition-new(root) { animation-name: theme-fade-in; }
+
+@keyframes theme-fade-out {
+  from { opacity: 1; filter: saturate(1); }
+  to { opacity: 0; filter: saturate(.82); }
+}
+
+@keyframes theme-fade-in {
+  from { opacity: 0; filter: saturate(.82); }
+  to { opacity: 1; filter: saturate(1); }
+}
+
+:root.theme-transition-fallback body,
+:root.theme-transition-fallback .app-shell,
+:root.theme-transition-fallback .titlebar,
+:root.theme-transition-fallback .sidebar,
+:root.theme-transition-fallback .surface-card,
+:root.theme-transition-fallback .hero-card,
+:root.theme-transition-fallback .hotkey-card,
+:root.theme-transition-fallback .character-card,
+:root.theme-transition-fallback .combo-option,
+:root.theme-transition-fallback .segmented,
+:root.theme-transition-fallback .segmented-indicator,
+:root.theme-transition-fallback .quick-hotkeys div,
+:root.theme-transition-fallback .theme-toggle,
+:root.theme-transition-fallback .theme-icon,
+:root.theme-transition-fallback .hotkey-modal,
+:root.theme-transition-fallback .community-card,
+:root.theme-transition-fallback .update-card,
+:root.theme-transition-fallback .combo-manage-actions,
+:root.theme-transition-fallback .combo-tool-button,
+:root.theme-transition-fallback .primary-button,
+:root.theme-transition-fallback .secondary-button,
+:root.theme-transition-fallback .info-banner,
+:root.theme-transition-fallback .import-target,
+:root.theme-transition-fallback .import-field input,
+:root.theme-transition-fallback .import-field select,
+:root.theme-transition-fallback .soft-chip,
+:root.theme-transition-fallback .current-combo-pill,
+:root.theme-transition-fallback .switch-track,
+:root.theme-transition-fallback .key-capture {
+  transition:
+    background-color 320ms cubic-bezier(.22, .78, .24, 1),
+    border-color 320ms cubic-bezier(.22, .78, .24, 1),
+    color 260ms ease,
+    box-shadow 320ms ease !important;
+}
+
+:root.theme-transitioning .theme-icon {
+  animation: theme-icon-turn 320ms cubic-bezier(.2, .82, .28, 1);
+}
+
+@keyframes theme-icon-turn {
+  0% { transform: rotate(0) scale(1); }
+  48% { transform: rotate(90deg) scale(.78); }
+  100% { transform: rotate(180deg) scale(1); }
+}
+
+/* Run once while the WebView is opening. JavaScript removes ui-entering after
+   the shell finishes so restoring or navigating the interface cannot replay it. */
+:root.ui-entering .app-shell {
+  transform-origin: 50% 46%;
+  animation: interface-shell-enter 520ms cubic-bezier(.2, .82, .24, 1) both;
+}
+
+:root.ui-entering .titlebar {
+  animation: interface-titlebar-enter 420ms 70ms cubic-bezier(.2, .82, .24, 1) both;
+}
+
+:root.ui-entering .sidebar {
+  animation: interface-sidebar-enter 460ms 110ms cubic-bezier(.2, .82, .24, 1) both;
+}
+
+:root.ui-entering .content {
+  animation: interface-content-enter 480ms 145ms cubic-bezier(.2, .82, .24, 1) both;
+}
+
+@keyframes interface-shell-enter {
+  from { opacity: 0; transform: translateY(10px) scale(.986); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes interface-titlebar-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes interface-sidebar-enter {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes interface-content-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 * {
@@ -1432,6 +1539,20 @@ select:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  :root.theme-transitioning .theme-icon {
+    animation-duration: .01ms !important;
+  }
+  :root.theme-transition-fallback * {
+    transition-duration: .01ms !important;
+  }
+  :root.ui-entering .app-shell,
+  :root.ui-entering .titlebar,
+  :root.ui-entering .sidebar,
+  :root.ui-entering .content {
+    animation: none !important;
+  }
   .combo-option,
   .combo-option.is-hold-pending,
   .combo-option.is-dragging {
