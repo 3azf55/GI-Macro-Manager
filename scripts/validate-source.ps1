@@ -48,7 +48,7 @@ foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath
     Assert-True (Test-Path $required -PathType Leaf) "Required source file is missing: $required"
 }
 
-$engineText = [System.IO.File]::ReadAllText($enginePath)
+$engineText = [System.IO.File]::ReadAllText($enginePath) -replace "`r`n?", "`n"
 $engineMatch = [regex]::Match($engineText, 'global AppVersion := "([^"]+)"')
 Assert-True $engineMatch.Success 'Could not read AppVersion from UMM.Engine.ahk.'
 
