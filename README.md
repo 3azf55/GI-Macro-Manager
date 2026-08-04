@@ -3,6 +3,10 @@
 A Windows macro manager built with **AutoHotkey v1**, **C# WinForms**, and **WebView2**.
 
 GI Macro Manager provides a modern interface for organizing, importing, running, exporting, deleting, and reordering macro packages. Characters and macros are loaded dynamically from the catalog rather than being hard-coded into the engine.
+<p align="center">
+  <img src="assets/images/app-preview.png" alt="Dashboard" width="48%">
+  <img src="assets/images/app-preview2.png" alt="Settings" width="48%">
+</p>
 
 ## Features
 
