@@ -62,7 +62,15 @@ if (-not (Test-Path $Project)) {
 if (-not (Test-Path $NuGetConfig)) {
     throw "NuGet.Config was not found: $NuGetConfig"
 }
+# Always rebuild the native FPS component before staging the package.
+$NativeBuildScript = Join-Path $PSScriptRoot "build-fps-unlocker.ps1"
 
+if (-not (Test-Path -LiteralPath $NativeBuildScript -PathType Leaf)) {
+    throw "Native build script missing at $NativeBuildScript."
+}
+
+Write-Host "Building native FPS component..."
+& $NativeBuildScript
 # Ensure UnlockerStub.dll is available in FpsUnlocker\Native\ for UMM.UI.csproj validation
 $CompiledDll = Join-Path $PackageRoot "FpsUnlocker\Native\UnlockerStub\bin\x64\Release\UnlockerStub.dll"
 $TargetDllFolder = Join-Path $PackageRoot "FpsUnlocker\Native"

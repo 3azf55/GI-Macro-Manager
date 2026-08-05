@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$PortableMsvcRoot = $env:MSVC_PORTABLE_ROOT
 )
 
@@ -21,22 +21,46 @@ if (-not (Test-Path -LiteralPath $Source)) {
 }
 
 function Import-BatchEnvironment {
-    param([Parameter(Mandatory = $true)][string]$BatchFile)
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BatchFile
+    )
 
     if (-not (Test-Path -LiteralPath $BatchFile -PathType Leaf)) {
         throw "Portable MSVC environment script was not found: $BatchFile"
     }
 
+    # Use the real Windows command processor instead of trusting ComSpec,
+    # because ComSpec may be overridden with an invalid directory.
+    $CmdExe = Join-Path $env:SystemRoot "System32\cmd.exe"
+
+    if (-not (Test-Path -LiteralPath $CmdExe -PathType Leaf)) {
+        $CmdCommand = Get-Command cmd.exe -ErrorAction SilentlyContinue
+
+        if (-not $CmdCommand) {
+            throw "cmd.exe was not found; the portable MSVC environment cannot be loaded."
+        }
+
+        $CmdExe = $CmdCommand.Source
+    }
+
     $EscapedBatchFile = $BatchFile.Replace('"', '""')
     $Command = 'call "{0}" >nul && set' -f $EscapedBatchFile
-    $EnvironmentLines = & $env:ComSpec /d /c $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "Portable MSVC environment setup failed with exit code $LASTEXITCODE."
+
+    $EnvironmentLines = & $CmdExe /d /c $Command
+    $ExitCode = $LASTEXITCODE
+
+    if ($ExitCode -ne 0) {
+        throw "Portable MSVC environment setup failed with exit code $ExitCode."
     }
 
     foreach ($Line in $EnvironmentLines) {
         if ($Line -match '^([^=]+)=(.*)$') {
-            [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+            [Environment]::SetEnvironmentVariable(
+                $Matches[1],
+                $Matches[2],
+                "Process"
+            )
         }
     }
 }
