@@ -55,12 +55,12 @@ if (!A_IsAdmin) {
 global CurrentCharacter := ""
 global CurrentMacro := ""
 global CurrentCatalogSchemaVersion := 4
-global MacroEnabled := true
 global AppMode := "CharacterCombos"
 global SkipStopMode := "Release"
 global SoundsEnabled := true
 global MacroRunning := false
 global StopRequested := false
+global HotkeyScope := "GameOnly"
 
 global TriggerKey := ""
 global TriggerDownHotkey := ""
@@ -91,7 +91,7 @@ global SkipInterruptKeyList := ""
 global AssetsDir := ""
 global IconDir := ""
 global SoundDir := ""
-global AppVersion := "v1.7.4"
+global AppVersion := "v1.7.5"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -171,15 +171,8 @@ Trigger_Down:
     if (MacroRunning)
         return
 
-    if (!IsConfiguredGameWindowActive())
+    if (!IsManagedHotkeyScopeActive())
         return
-
-    if (!MacroEnabled) {
-        StopRequested := true
-        ReleaseAll()
-        ShowShortcutTooltip("Macros: OFF", 900)
-        return
-    }
 
     StopRequested := false
     MacroRunning := true
@@ -217,29 +210,6 @@ return
 ShowSettingsGui:
     if (!LaunchWebUI())
         MsgBox, 48, Macro Manager, Unable to open the WebView2 interface.
-return
-
-ToggleScriptEnabled:
-    if (MacroRunning) {
-        ShowModeTooltip("Release the trigger first", 1000)
-        return
-    }
-
-    MacroEnabled := !MacroEnabled
-    if (!MacroEnabled) {
-        StopRequested := true
-        ReleaseAll()
-        PlayFeedbackSound("off")
-    } else {
-        PlayFeedbackSound("on")
-    }
-
-    SaveRuntimeSettings()
-    SetupTrayMenu()
-    SetTrayIconByCharacter()
-    UpdateTrayText()
-    WebUI_SendState()
-    ShowModeTooltip("Macros: " . (MacroEnabled ? "ON" : "OFF"), 1000)
 return
 
 ResetAllHotkeys:
@@ -406,7 +376,7 @@ WebUI_ReadCommandPayload(commandPath, ByRef payload) {
 
 WebUI_FileBridgeWriteState(payload := "") {
     global WebBridgeStateFile, WebBridgeLastStateTick, WebBridgeInitialized
-    global MacroEnabled, SoundsEnabled, MacroRunning, AppMode, SkipStopMode
+    global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
     global CurrentCharacter, CurrentMacro
     global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
     global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
@@ -419,11 +389,11 @@ WebUI_FileBridgeWriteState(payload := "") {
         payload := "type=state"
             . "`nenginePid=" . enginePid
             . "`nheartbeat=" . A_TickCount
-            . "`nmacroEnabled=" . (MacroEnabled ? 1 : 0)
             . "`nsoundsEnabled=" . (SoundsEnabled ? 1 : 0)
             . "`nmacroRunning=" . (MacroRunning ? 1 : 0)
             . "`nappMode=" . AppMode
             . "`nskipStopMode=" . SkipStopMode
+            . "`nhotkeyScope=" . HotkeyScope
             . "`ncharacter=" . CurrentCharacter
             . "`ncombo=" . CurrentMacro
             . "`ncomboDisplay=" . GetComboDisplay(CurrentMacro)
@@ -636,12 +606,12 @@ WebUI_IsSafeProtocolValue(value, maximumLength) {
 }
 
 WebUI_IsAllowedAction(action) {
-    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setMacroEnabled|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|setHotkey|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
+    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|setHotkey|setHotkeyScope|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
     return InStr(allowedActions, "|" . action . "|", true)
 }
 
 WebUI_HandleCommand(message) {
-    global MacroRunning, MacroEnabled, SoundsEnabled, SkipStopMode
+    global MacroRunning, SoundsEnabled, SkipStopMode
     global AutoLaunchExePath, AutoLaunchEnabled, ConfigFile
 
     action := message.HasKey("action") ? message.action : ""
@@ -676,12 +646,6 @@ WebUI_HandleCommand(message) {
             return
         }
         SetAppMode(value)
-        return
-    }
-
-    if (action = "setMacroEnabled") {
-        desired := WebUI_ToBool(value)
-        WebUI_SetMacroEnabled(desired)
         return
     }
 
@@ -749,6 +713,11 @@ WebUI_HandleCommand(message) {
     if (action = "setHotkey") {
         target := message.HasKey("target") ? message.target : ""
         WebUI_SetHotkey(target, value)
+        return
+    }
+
+    if (action = "setHotkeyScope") {
+        SetHotkeyScope(value)
         return
     }
 
@@ -824,38 +793,6 @@ WebUI_HandleCommand(message) {
     }
 }
 
-WebUI_SetMacroEnabled(desired) {
-    global MacroRunning, MacroEnabled, StopRequested
-
-    if (MacroRunning) {
-        WebUI_SendError("Release the trigger before changing macro state.")
-        return false
-    }
-
-    desired := desired ? true : false
-    if (MacroEnabled = desired) {
-        WebUI_SendState()
-        return true
-    }
-
-    MacroEnabled := desired
-    if (!MacroEnabled) {
-        StopRequested := true
-        ReleaseAll()
-        PlayFeedbackSound("off")
-    } else {
-        PlayFeedbackSound("on")
-    }
-
-    SaveRuntimeSettings()
-    SetupTrayMenu()
-    SetTrayIconByCharacter()
-    UpdateTrayText()
-    WebUI_SendState()
-    ShowModeTooltip("Macros: " . (MacroEnabled ? "ON" : "OFF"), 1000)
-    return true
-}
-
 WebUI_SetHotkey(target, newKey) {
     global MacroRunning
 
@@ -903,17 +840,17 @@ WebUI_SendState() {
 
     messageResult := false
     if (WebUIHwnd && DllCall("IsWindow", "Ptr", WebUIHwnd)) {
-        global MacroEnabled, SoundsEnabled, MacroRunning, AppMode, SkipStopMode
+        global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
         global CurrentCharacter, CurrentMacro
         global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
         global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
 
         payload := "type=state"
-            . "`nmacroEnabled=" . (MacroEnabled ? 1 : 0)
             . "`nsoundsEnabled=" . (SoundsEnabled ? 1 : 0)
             . "`nmacroRunning=" . (MacroRunning ? 1 : 0)
             . "`nappMode=" . AppMode
             . "`nskipStopMode=" . SkipStopMode
+            . "`nhotkeyScope=" . HotkeyScope
             . "`ncharacter=" . CurrentCharacter
             . "`ncombo=" . CurrentMacro
             . "`ncomboDisplay=" . GetComboDisplay(CurrentMacro)
@@ -3155,26 +3092,28 @@ ResolveProjectPaths() {
 
 LoadRuntimeSettings() {
     global ConfigFile, CurrentCharacter, CurrentMacro
-    global MacroEnabled, AppMode, SkipStopMode, SoundsEnabled, AutoLaunchExePath, AutoLaunchEnabled
+    global AppMode, SkipStopMode, SoundsEnabled, AutoLaunchExePath, AutoLaunchEnabled, HotkeyScope
     global CharacterOrder
 
     defaultCharacter := CharacterOrder.Length() ? CharacterOrder[1] : ""
     IniRead, SavedCharacter, %ConfigFile%, State, Character, %defaultCharacter%
     IniRead, SavedCombo, %ConfigFile%, State, Combo,
-    IniRead, SavedEnabled, %ConfigFile%, State, Enabled, 1
     IniRead, SavedAppMode, %ConfigFile%, State, AppMode, CharacterCombos
     IniRead, SavedSkipStopMode, %ConfigFile%, Settings, SkipStopMode, Release
     IniRead, SavedSounds, %ConfigFile%, Settings, SoundsEnabled, 1
+    IniRead, SavedHotkeyScope, %ConfigFile%, Settings, HotkeyScope, GameOnly
     IniRead, SavedAutoLaunchExe, %ConfigFile%, Settings, AutoLaunchExe,
     IniRead, SavedAutoLaunchEnabled, %ConfigFile%, Settings, AutoLaunchEnabled, 1
+
+    ; v1.7.5 removed the global macro ON/OFF state. Clean up the obsolete key
+    ; while preserving all current character, combo, and preference values.
+    IniDelete, %ConfigFile%, State, Enabled
 
     if (!MacroCatalog_CharacterExists(SavedCharacter))
         SavedCharacter := defaultCharacter
 
-    if (SavedCombo = "Off") {
+    if (SavedCombo = "Off")
         SavedCombo := ""
-        SavedEnabled := 0
-    }
 
     if (!IsValidComboForCharacter(SavedCharacter, SavedCombo)) {
         IniRead, SavedLastCombo, %ConfigFile%, LastCombo, %SavedCharacter%,
@@ -3188,13 +3127,15 @@ LoadRuntimeSettings() {
         SavedAppMode := "CharacterCombos"
     if (SavedSkipStopMode != "Release" && SavedSkipStopMode != "AnyKey")
         SavedSkipStopMode := "Release"
+    if (SavedHotkeyScope != "GameOnly" && SavedHotkeyScope != "Everywhere")
+        SavedHotkeyScope := "GameOnly"
 
     CurrentCharacter := SavedCharacter
     CurrentMacro := SavedCombo
     AppMode := SavedAppMode
     SkipStopMode := SavedSkipStopMode
-    MacroEnabled := (SavedEnabled = 1 || SavedEnabled = "true" || SavedEnabled = "ON")
     SoundsEnabled := (SavedSounds = 1 || SavedSounds = "true" || SavedSounds = "ON")
+    HotkeyScope := SavedHotkeyScope
     AutoLaunchExePath := (SavedAutoLaunchExe = "ERROR") ? "" : SavedAutoLaunchExe
     AutoLaunchEnabled := (SavedAutoLaunchEnabled = 1 || SavedAutoLaunchEnabled = "true" || SavedAutoLaunchEnabled = "ON")
 
@@ -3203,19 +3144,18 @@ LoadRuntimeSettings() {
 
 SaveRuntimeSettings() {
     global ConfigFile, CurrentCharacter, CurrentMacro
-    global MacroEnabled, AppMode, SkipStopMode, SoundsEnabled, AutoLaunchExePath, AutoLaunchEnabled
+    global AppMode, SkipStopMode, SoundsEnabled, AutoLaunchExePath, AutoLaunchEnabled, HotkeyScope
 
-    enabledValue := MacroEnabled ? 1 : 0
     soundsValue := SoundsEnabled ? 1 : 0
 
     IniWrite, %CurrentCharacter%, %ConfigFile%, State, Character
     IniWrite, %CurrentMacro%, %ConfigFile%, State, Combo
     if (CurrentCharacter != "" && CurrentMacro != "")
         IniWrite, %CurrentMacro%, %ConfigFile%, LastCombo, %CurrentCharacter%
-    IniWrite, %enabledValue%, %ConfigFile%, State, Enabled
     IniWrite, %AppMode%, %ConfigFile%, State, AppMode
     IniWrite, %SkipStopMode%, %ConfigFile%, Settings, SkipStopMode
     IniWrite, %soundsValue%, %ConfigFile%, Settings, SoundsEnabled
+    IniWrite, %HotkeyScope%, %ConfigFile%, Settings, HotkeyScope
     IniWrite, %AutoLaunchExePath%, %ConfigFile%, Settings, AutoLaunchExe
     IniWrite, % (AutoLaunchEnabled ? 1 : 0), %ConfigFile%, Settings, AutoLaunchEnabled
 }
@@ -3238,13 +3178,22 @@ GetGameHotkeyWindowSelector(executablePath := "") {
 }
 
 IsConfiguredGameWindowActive() {
-    global ManagedHotkeyWindowSelector
+    return !!WinActive(GetGameHotkeyWindowSelector())
+}
 
-    selector := ManagedHotkeyWindowSelector
-    if (selector = "")
-        selector := GetGameHotkeyWindowSelector()
+GetManagedHotkeyWindowSelector() {
+    global HotkeyScope
 
-    return !!WinActive(selector)
+    if (HotkeyScope = "Everywhere")
+        return ""
+
+    return GetGameHotkeyWindowSelector()
+}
+
+IsManagedHotkeyScopeActive() {
+    global HotkeyScope
+
+    return (HotkeyScope = "Everywhere") || IsConfiguredGameWindowActive()
 }
 
 RefreshManagedHotkeyScope() {
@@ -3252,7 +3201,7 @@ RefreshManagedHotkeyScope() {
     global ManagedHotkeyWindowSelector
 
     if (TriggerKey = "" || ComboToggleKey = "" || CharacterToggleKey = "" || ModeToggleKey = "") {
-        ManagedHotkeyWindowSelector := GetGameHotkeyWindowSelector()
+        ManagedHotkeyWindowSelector := GetManagedHotkeyWindowSelector()
         return true
     }
 
@@ -3548,7 +3497,7 @@ LoadHotkeySettings() {
 }
 
 SetupTrayMenu() {
-    global CharacterToggleKey, ModeToggleKey, MacroEnabled, CurrentCharacter, AppMode
+    global CharacterToggleKey, ModeToggleKey, CurrentCharacter, AppMode, HotkeyScope
     global CharacterCatalog, CharacterOrder
 
     Menu, Tray, NoStandard
@@ -3573,7 +3522,8 @@ SetupTrayMenu() {
     for index, characterName in CharacterOrder
         Menu, CharacterMenu, Add, %characterName%, SelectDynamicCharacter
 
-    statusLabel := "Macros: " . (MacroEnabled ? "ON" : "OFF") . " | " . GetAppModeDisplay()
+    scopeLabel := (HotkeyScope = "Everywhere") ? "Everywhere" : "Game only"
+    statusLabel := "Mode: " . GetAppModeDisplay() . " | " . scopeLabel
     Menu, Tray, Add, %statusLabel%, TrayNoOp
     Menu, Tray, Disable, %statusLabel%
     Menu, Tray, Add
@@ -3584,11 +3534,6 @@ SetupTrayMenu() {
     Menu, Tray, Add, Select Character`t%CharacterToggleKey%, :CharacterMenu
     Menu, Tray, Add, Select Combo, :ModeMenu
     Menu, Tray, Add
-
-    if (MacroEnabled)
-        Menu, Tray, Add, Turn Macros OFF, ToggleScriptEnabled
-    else
-        Menu, Tray, Add, Turn Macros ON, ToggleScriptEnabled
 
     Menu, Tray, Add, Reset Hotkeys, ResetAllHotkeys
     Menu, Tray, Add
@@ -3687,15 +3632,16 @@ SetMode(modeName, showShortcutFeedback := false) {
     return true
 }
 
-UseManagedHotkeyContext(selector := "") {
+UseManagedHotkeyContext(selector := "__MANAGED__") {
     global ManagedHotkeyWindowSelector
 
-    if (selector = "")
+    if (selector = "__MANAGED__")
         selector := ManagedHotkeyWindowSelector
-    if (selector = "")
-        selector := GetGameHotkeyWindowSelector()
 
-    Hotkey, IfWinActive, %selector%
+    if (selector = "")
+        Hotkey, IfWinActive
+    else
+        Hotkey, IfWinActive, %selector%
 }
 
 ClearManagedHotkeyContext() {
@@ -4053,7 +3999,7 @@ ApplyHotkeyConfiguration(keys, save := true, restoreOnFailure := true) {
 
     DisableAllManagedHotkeys()
     ClearManagedHotkeyState()
-    ManagedHotkeyWindowSelector := GetGameHotkeyWindowSelector()
+    ManagedHotkeyWindowSelector := GetManagedHotkeyWindowSelector()
 
     success := SetTriggerHotkey(keys.Trigger, false, false) && SetComboToggleHotkey(keys.ComboToggle, false, false) && SetCharacterToggleHotkey(keys.CharacterToggle, false, false) && SetModeToggleHotkey(keys.ModeToggle, false, false)
 
@@ -4077,6 +4023,43 @@ ApplyHotkeyConfiguration(keys, save := true, restoreOnFailure := true) {
     }
 
     return false
+}
+
+SetHotkeyScope(scopeName) {
+    global HotkeyScope, MacroRunning
+
+    scopeName := Trim(scopeName)
+    if (scopeName != "GameOnly" && scopeName != "Everywhere") {
+        WebUI_SendError("Choose either Game only or Everywhere.")
+        return false
+    }
+
+    if (MacroRunning) {
+        WebUI_SendError("Release the trigger before changing hotkey scope.")
+        return false
+    }
+
+    if (HotkeyScope = scopeName) {
+        WebUI_SendState()
+        return true
+    }
+
+    previousScope := HotkeyScope
+    HotkeyScope := scopeName
+    if (!RefreshManagedHotkeyScope()) {
+        HotkeyScope := previousScope
+        RefreshManagedHotkeyScope()
+        WebUI_SendError("The hotkey scope could not be changed safely.")
+        return false
+    }
+
+    SaveRuntimeSettings()
+    SetupTrayMenu()
+    UpdateTrayText()
+    WebUI_SendState()
+    scopeLabel := (HotkeyScope = "Everywhere") ? "Everywhere" : "Game only"
+    ShowModeTooltip("Hotkeys: " . scopeLabel, 1000)
+    return true
 }
 
 DisableAllManagedHotkeys() {
@@ -4125,7 +4108,7 @@ ResetHotkeysToDefault() {
 }
 
 UpdateTrayText() {
-    global CurrentCharacter, CurrentMacro, MacroEnabled, AppMode, TriggerKey
+    global CurrentCharacter, CurrentMacro, AppMode, TriggerKey, HotkeyScope
     global CharacterCatalog, CharacterOrder
 
     Menu, AppModeMenu, Uncheck, Character combos
@@ -4148,8 +4131,8 @@ UpdateTrayText() {
         Menu, CharacterMenu, Uncheck, %characterName%
     Menu, CharacterMenu, Check, %CurrentCharacter%
 
-    status := MacroEnabled ? "ON" : "OFF"
-    trayTip := "Status: " . status . "`nMode: " . GetAppModeDisplay() . "`nTrigger: " . TriggerKey
+    scopeLabel := (HotkeyScope = "Everywhere") ? "Everywhere" : "Game only"
+    trayTip := "Mode: " . GetAppModeDisplay() . "`nHotkeys: " . scopeLabel . "`nTrigger: " . TriggerKey
     if (AppMode = "CharacterCombos")
         trayTip .= "`nCharacter: " . CurrentCharacter . "`nCombo: " . GetComboDisplay(CurrentMacro)
     Menu, Tray, Tip, %trayTip%

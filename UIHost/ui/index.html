@@ -38,6 +38,9 @@
         <button class="nav-item" data-page="hotkeys">
           <span class="nav-icon">⌨</span><span class="preserve-ltr">Hotkeys</span>
         </button>
+        <button class="nav-item" data-page="fps">
+          <span class="nav-icon">◫</span><span class="preserve-ltr">FPS</span>
+        </button>
         <button class="nav-item" data-page="startup">
           <span class="nav-icon">↗</span><span class="preserve-ltr">Startup</span>
         </button>
@@ -70,7 +73,6 @@
           <div><span class="eyebrow" data-i18n="controlCenter">CONTROL CENTER</span><h1 data-i18n="dashboardTitle">Dashboard</h1></div>
           <div class="page-heading-actions">
             <button id="startGameButton" class="secondary-button dashboard-start-button" type="button">Start game</button>
-            <button id="macroStateButton" class="macro-state-button" type="button" aria-pressed="true" title="Turn macros OFF">ON</button>
           </div>
         </div>
 
@@ -173,8 +175,75 @@
           <div><span class="eyebrow" data-i18n="inputSettings">INPUT SETTINGS</span><h1 data-i18n="hotkeysTitle">Hotkeys</h1></div>
           <button class="secondary-button" id="resetHotkeysButton">Reset defaults</button>
         </div>
+        <article class="surface-card hotkey-scope-card" aria-labelledby="hotkeyScopeTitle">
+          <div class="hotkey-scope-copy">
+            <span class="eyebrow" data-i18n="hotkeyScopeEyebrow">ACTIVATION SCOPE</span>
+            <h2 id="hotkeyScopeTitle" data-i18n="hotkeyScopeTitle">Where hotkeys work</h2>
+            <p data-i18n="hotkeyScopeHelp">Choose whether the configured hotkeys respond everywhere or only while the game window is focused.</p>
+          </div>
+          <div class="segmented hotkey-scope-segmented" id="hotkeyScopeSegmented" role="group" aria-labelledby="hotkeyScopeTitle">
+            <span class="segmented-indicator" aria-hidden="true"></span>
+            <button type="button" data-hotkey-scope="Everywhere">Everywhere</button>
+            <button type="button" data-hotkey-scope="GameOnly">Game only</button>
+          </div>
+        </article>
         <div id="hotkeyGrid" class="hotkey-grid"></div>
-        <div class="info-banner" data-i18n="hotkeyInfo">Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.</div>
+        <div class="info-banner" id="hotkeyInfo">Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.</div>
+      </section>
+
+      <section class="page" data-page-panel="fps">
+        <div class="page-heading">
+          <div><span class="eyebrow" data-i18n="fpsSettings">FRAME LIMITER</span><h1 data-i18n="fpsTitle">FPS</h1></div>
+        </div>
+
+        <div class="fps-layout">
+          <article class="surface-card fps-limiter-card" aria-labelledby="fpsLimiterTitle">
+            <div class="fps-card-heading">
+              <div>
+                <span class="eyebrow" data-i18n="fpsUnlockerEyebrow">FPS UNLOCKER</span>
+                <h2 id="fpsLimiterTitle" data-i18n="fpsLimiterTitle">Frame-rate limiter</h2>
+              </div>
+              <div class="fps-heading-actions">
+                <span class="fps-risk-hint" tabindex="0" role="img" aria-label="FPS unlocker safety notice" aria-describedby="fpsRiskTooltip">
+                  <span aria-hidden="true">!</span>
+                  <span class="fps-risk-tooltip" id="fpsRiskTooltip" role="tooltip" data-i18n="fpsRiskTooltip">This feature modifies game memory and may carry compatibility or account risk.</span>
+                </span>
+                <label class="switch fps-enable-switch" title="Enable FPS unlocker">
+                  <input type="checkbox" id="fpsUnlockToggle" aria-label="Enable FPS unlocker" />
+                  <span class="switch-track"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="fps-value-row">
+              <label for="fpsTargetInput">Target</label>
+              <div class="fps-number-field">
+                <input id="fpsTargetInput" type="number" inputmode="numeric" min="10" max="420" step="1" value="120" />
+                <span>FPS</span>
+              </div>
+            </div>
+
+            <div class="fps-slider-block">
+              <input class="fps-slider" id="fpsTargetSlider" type="range" min="10" max="420" step="1" value="120" aria-label="Target FPS" />
+              <div class="fps-range-labels" aria-hidden="true"><span>10</span><span>420</span></div>
+            </div>
+
+            <div class="fps-presets" aria-label="FPS presets">
+              <button type="button" data-fps-preset="60">60</button>
+              <button type="button" data-fps-preset="90">90</button>
+              <button type="button" data-fps-preset="120">120</button>
+              <button type="button" data-fps-preset="144">144</button>
+              <button type="button" data-fps-preset="165">165</button>
+              <button type="button" data-fps-preset="240">240</button>
+              <button type="button" data-fps-preset="420">420</button>
+            </div>
+
+            <div class="fps-status" id="fpsStatus" data-status="disabled">
+              <span class="fps-status-dot" aria-hidden="true"></span>
+              <div><strong id="fpsStatusLabel">Disabled</strong><small id="fpsStatusMessage">Enable the limiter, then start the game.</small></div>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section class="page" data-page-panel="startup">

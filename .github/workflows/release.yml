@@ -90,7 +90,9 @@ jobs:
             '.\dist\Macros\registry.ini',
             '.\dist\Assets\fonts\OFL.txt',
             '.\dist\LICENSE',
-            '.\dist\docs\MACRO_CREDITS.md'
+            '.\dist\docs\MACRO_CREDITS.md',
+            '.\dist\Native\UnlockerStub.dll',
+            '.\dist\FpsUnlocker\LICENSE-UPSTREAM.txt'
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) {

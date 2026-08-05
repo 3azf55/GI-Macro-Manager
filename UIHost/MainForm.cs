@@ -23,7 +23,6 @@ public sealed class MainForm : Form
             ["setCharacter"] = CommandFields(("value", 50)),
             ["setCombo"] = CommandFields(("value", 120)),
             ["setAppMode"] = CommandFields(("value", 32)),
-            ["setMacroEnabled"] = CommandFields(("value", 8)),
             ["setSoundsEnabled"] = CommandFields(("value", 8)),
             ["setSkipStopMode"] = CommandFields(("value", 16)),
             ["importMacro"] = CommandFields(
@@ -37,6 +36,7 @@ public sealed class MainForm : Form
             ["exportMacro"] = CommandFields(("comboId", 120)),
             ["reorderMacros"] = CommandFields(("character", 50), ("comboIds", 16 * 1024)),
             ["setHotkey"] = CommandFields(("target", 32), ("value", 32)),
+            ["setHotkeyScope"] = CommandFields(("value", 16)),
             ["resetHotkeys"] = CommandFields(),
             ["setAutoLaunchEnabled"] = CommandFields(("value", 8)),
             ["startGame"] = CommandFields(),
@@ -53,6 +53,7 @@ public sealed class MainForm : Form
     private readonly string _commandsDirectory;
     private readonly string _stateFile;
     private readonly string _errorFile;
+    private readonly string _iconsDirectory;
     private readonly System.Windows.Forms.Timer _bridgeTimer = new();
     private readonly System.Windows.Forms.Timer _singleInstanceTimer = new();
     private readonly EventWaitHandle _activationEvent;
@@ -60,6 +61,7 @@ public sealed class MainForm : Form
     private readonly string _windowPlacementPath;
     private readonly string _lastUpdateCheckPath;
     private readonly GitHubUpdateService _updateService = new();
+    private readonly FpsUnlockService _fpsUnlockService;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private UpdateCheckResult? _availableUpdate;
     private bool _webReady;
@@ -70,6 +72,9 @@ public sealed class MainForm : Form
     private bool _closingForUpdate;
     private DateTime _lastStateWriteUtc = DateTime.MinValue;
     private DateTime _lastErrorWriteUtc = DateTime.MinValue;
+    private string _lastFpsFingerprint = string.Empty;
+    private string _taskbarIconFingerprint = "\0";
+    private Icon? _taskbarIcon;
 
     public MainForm(
         int enginePid,
@@ -88,11 +93,15 @@ public sealed class MainForm : Form
         Directory.CreateDirectory(settingsDirectory);
         _windowPlacementPath = Path.Combine(settingsDirectory, "window-placement.json");
         _lastUpdateCheckPath = Path.Combine(settingsDirectory, "last-update-check.txt");
+        _fpsUnlockService = new FpsUnlockService(
+            settingsDirectory,
+            Path.Combine(AppContext.BaseDirectory, "Native", "UnlockerStub.dll"));
 
         _bridgeDirectory = Path.Combine(_rootDirectory, "bridge");
         _commandsDirectory = Path.Combine(_bridgeDirectory, "commands");
         _stateFile = Path.Combine(_bridgeDirectory, "state.txt");
         _errorFile = Path.Combine(_bridgeDirectory, "error.txt");
+        _iconsDirectory = Path.Combine(_rootDirectory, "Assets", "icons");
 
         Directory.CreateDirectory(_commandsDirectory);
 
@@ -102,7 +111,7 @@ public sealed class MainForm : Form
         MaximizeBox = false;
         MinimizeBox = true;
         SizeGripStyle = SizeGripStyle.Hide;
-        ShowIcon = false;
+        ShowIcon = true;
         BackColor = Color.FromArgb(15, 17, 23);
 
         StartPosition = FormStartPosition.CenterScreen;
@@ -110,6 +119,7 @@ public sealed class MainForm : Form
         MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);
         MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);
         RestoreWindowPlacement();
+        UpdateTaskbarIcon(string.Empty);
 
         // The AutoHotkey engine owns the only notification-area icon.
         // Closing this form exits only the WebView2 host; the engine remains
@@ -119,7 +129,11 @@ public sealed class MainForm : Form
         Controls.Add(_webView);
 
         _bridgeTimer.Interval = 200;
-        _bridgeTimer.Tick += (_, _) => PollFileBridge();
+        _bridgeTimer.Tick += (_, _) =>
+        {
+            PollFileBridge();
+            PostFpsStateIfChanged();
+        };
 
         _windowPlacementTimer.Interval = 450;
         _windowPlacementTimer.Tick += (_, _) =>
@@ -219,6 +233,7 @@ public sealed class MainForm : Form
 
                 _webReady = true;
                 BeginFileBridge();
+                PostFpsStateIfChanged(force: true);
                 PostPreviousUpdateResult();
                 if (ShouldRunAutomaticUpdateCheck())
                 {
@@ -304,6 +319,12 @@ public sealed class MainForm : Form
                 case "installUpdate":
                     _ = InstallAvailableUpdateAsync();
                     return;
+                case "setFpsUnlockEnabled":
+                    HandleSetFpsUnlockEnabled(root);
+                    return;
+                case "setFpsTarget":
+                    HandleSetFpsTarget(root);
+                    return;
             }
 
             if (!TryBuildWebEngineCommand(root, action, out var values))
@@ -345,6 +366,7 @@ public sealed class MainForm : Form
 
         _engineConnected = true;
         Log($"Received optional WM_COPYDATA engine message type={type}.");
+        UpdateTaskbarIconFromState(message);
         PostToWeb(message);
     }
 
@@ -495,6 +517,7 @@ public sealed class MainForm : Form
             _macroRunning = state.TryGetValue("macroRunning", out var macroRunningText) &&
                 (macroRunningText.Equals("1", StringComparison.OrdinalIgnoreCase) ||
                  macroRunningText.Equals("true", StringComparison.OrdinalIgnoreCase));
+            UpdateTaskbarIconFromState(state);
             PostToWeb(state);
         }
         catch (IOException)
@@ -786,6 +809,153 @@ public sealed class MainForm : Form
         }
 
         _updateService.Dispose();
+        _fpsUnlockService.Dispose();
+
+        var taskbarIcon = _taskbarIcon;
+        _taskbarIcon = null;
+        Icon = null;
+        taskbarIcon?.Dispose();
+    }
+
+    private void UpdateTaskbarIconFromState(IReadOnlyDictionary<string, string> state)
+    {
+        if (state.TryGetValue("character", out var character))
+        {
+            UpdateTaskbarIcon(character);
+        }
+    }
+
+    private void UpdateTaskbarIcon(string character)
+    {
+        var iconPath = ResolveTaskbarIconPath(character);
+        var fingerprint = $"{character}\n{iconPath}";
+        if (fingerprint.Equals(_taskbarIconFingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            Icon? nextIcon = null;
+            if (!string.IsNullOrEmpty(iconPath))
+            {
+                using var sourceIcon = new Icon(iconPath);
+                nextIcon = (Icon)sourceIcon.Clone();
+            }
+            else
+            {
+                nextIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            }
+
+            if (nextIcon is null)
+            {
+                return;
+            }
+
+            var previousIcon = _taskbarIcon;
+            _taskbarIcon = nextIcon;
+            Icon = nextIcon;
+            ShowIcon = true;
+            _taskbarIconFingerprint = fingerprint;
+            previousIcon?.Dispose();
+
+            Log(string.IsNullOrWhiteSpace(character)
+                ? "Taskbar icon initialized."
+                : $"Taskbar icon updated for character={character}.");
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Log($"Could not update the taskbar icon: {exception.Message}");
+        }
+    }
+
+    private string? ResolveTaskbarIconPath(string character)
+    {
+        try
+        {
+            if (!Directory.Exists(_iconsDirectory))
+            {
+                return null;
+            }
+
+            var availableIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in Directory.EnumerateFiles(_iconsDirectory, "*.ico", SearchOption.TopDirectoryOnly))
+            {
+                availableIcons.TryAdd(Path.GetFileNameWithoutExtension(path), path);
+            }
+
+            foreach (var candidate in GetCharacterIconNames(character))
+            {
+                if (availableIcons.TryGetValue(candidate, out var matchingPath))
+                {
+                    return matchingPath;
+                }
+            }
+
+            foreach (var fallback in new[] { "default", "Skip" })
+            {
+                if (availableIcons.TryGetValue(fallback, out var fallbackPath))
+                {
+                    return fallbackPath;
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            Log($"Could not inspect the taskbar icon folder: {exception.Message}");
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> GetCharacterIconNames(string character)
+    {
+        character = character.Trim();
+        if (character.Length == 0)
+        {
+            yield break;
+        }
+
+        yield return character;
+
+        var compactName = character.Replace(" ", string.Empty, StringComparison.Ordinal);
+        if (!compactName.Equals(character, StringComparison.Ordinal))
+        {
+            yield return compactName;
+        }
+
+        var slugName = ToAssetSlug(character);
+        if (!slugName.Equals(character, StringComparison.Ordinal) &&
+            !slugName.Equals(compactName, StringComparison.Ordinal))
+        {
+            yield return slugName;
+        }
+    }
+
+    private static string ToAssetSlug(string value)
+    {
+        var slug = new System.Text.StringBuilder(value.Length);
+        var replacingCharacters = false;
+
+        foreach (var character in value)
+        {
+            var isAllowed = character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-';
+            if (isAllowed)
+            {
+                slug.Append(character);
+                replacingCharacters = false;
+            }
+            else if (!replacingCharacters)
+            {
+                slug.Append('_');
+                replacingCharacters = true;
+            }
+        }
+
+        var result = slug.ToString().Trim('_');
+        return result.Length == 0 ? "macro" : result;
     }
 
     private async Task CheckForUpdatesAsync(bool manual)
@@ -1132,6 +1302,123 @@ public sealed class MainForm : Form
                 ["value"] = dialog.FileName
             });
         }
+    }
+
+    private void HandleSetFpsUnlockEnabled(JsonElement root)
+    {
+        if (!TryReadBooleanValue(root, out var enabled))
+        {
+            PostToWeb(new Dictionary<string, string>
+            {
+                ["type"] = "error",
+                ["message"] = "The FPS unlocker setting was rejected."
+            });
+            return;
+        }
+
+        if (!_fpsUnlockService.SetEnabled(enabled) && enabled)
+        {
+            PostToWeb(new Dictionary<string, string>
+            {
+                ["type"] = "error",
+                ["message"] = "The native FPS component is missing. Build or install the complete Windows release."
+            });
+        }
+
+        PostFpsStateIfChanged(force: true);
+    }
+
+    private void HandleSetFpsTarget(JsonElement root)
+    {
+        if (!HasOnlyActionAndValue(root) ||
+            !root.TryGetProperty("value", out var valueElement) ||
+            valueElement.ValueKind != JsonValueKind.Number ||
+            !valueElement.TryGetInt32(out var target) ||
+            target is < 10 or > 420)
+        {
+            PostToWeb(new Dictionary<string, string>
+            {
+                ["type"] = "error",
+                ["message"] = "Target FPS must be a whole number from 10 to 420."
+            });
+            return;
+        }
+
+        _fpsUnlockService.SetTarget(target);
+        PostFpsStateIfChanged(force: true);
+    }
+
+    private static bool TryReadBooleanValue(JsonElement root, out bool value)
+    {
+        value = false;
+        if (!HasOnlyActionAndValue(root) ||
+            !root.TryGetProperty("value", out var valueElement))
+        {
+            return false;
+        }
+
+        if (valueElement.ValueKind == JsonValueKind.True)
+        {
+            value = true;
+            return true;
+        }
+
+        if (valueElement.ValueKind == JsonValueKind.False)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasOnlyActionAndValue(JsonElement root)
+    {
+        var actionCount = 0;
+        var valueCount = 0;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.NameEquals("action") && ++actionCount == 1)
+            {
+                continue;
+            }
+
+            if (property.NameEquals("value") && ++valueCount == 1)
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return actionCount == 1 && valueCount == 1;
+    }
+
+    private void PostFpsStateIfChanged(bool force = false)
+    {
+        var snapshot = _fpsUnlockService.GetSnapshot();
+        var fingerprint = string.Join(
+            "\u001f",
+            snapshot.Enabled,
+            snapshot.Target,
+            snapshot.Status,
+            snapshot.Message,
+            snapshot.Available);
+
+        if (!force && fingerprint.Equals(_lastFpsFingerprint, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastFpsFingerprint = fingerprint;
+        PostToWeb(new Dictionary<string, string>
+        {
+            ["type"] = "fpsState",
+            ["fpsEnabled"] = snapshot.Enabled ? "1" : "0",
+            ["fpsTarget"] = snapshot.Target.ToString(),
+            ["fpsStatus"] = snapshot.Status,
+            ["fpsMessage"] = snapshot.Message,
+            ["fpsAvailable"] = snapshot.Available ? "1" : "0"
+        });
     }
 
     private static void OpenExternal(JsonElement root)

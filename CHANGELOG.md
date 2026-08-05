@@ -1,108 +1,64 @@
 # Changelog
 
-## Unreleased
+## v1.7.5
 
-- Changed Add macro to Import macro and removed the metadata form and trust confirmation from the import flow.
-- Import names, descriptions, and tags from leading AHK comment metadata, with a filename-based name fallback and automatic duplicate suffixes.
-- Added editing for existing macro names, descriptions, FPS tags, and TESTING tags while preserving stable macro IDs and package folders.
-- Removed macro-card hover tooltips, empty Select this macro placeholders, and character macro-count labels.
-- Updated character cards for square 256 x 256 portraits and removed the press-stage transform that caused macro cards to shake during normal selection.
-- Reorganized the Dashboard with Application Mode inside the selected Character Combos card and a square Quick Controls card.
-- Expanded the Character Combos card to embed square Quick Controls in its upper-right area and place equal-sized Application Mode and Skip Dialog Behavior controls in its bottom row.
-- Moved Sound Feedback beside the compact icon-only theme control in the sidebar.
-- Reduced the spacing in the Trigger release / Any key selector.
-- Reduced character-card sizing to four cards per desktop row and stabilized Hotkey-card DOM and hover rendering to prevent repeated pointer jitter.
+- Added a Hotkeys activation scope with `Everywhere` and `Game only` modes; existing installations default to `Game only`.
+- Removed the global macro ON/OFF control from the application, runtime settings, and tray menu.
+- Added an optional FPS limiter with a 10–420 FPS range, presets, saved settings, and live connection status, using a native component adapted from PowerPaimon.
+- Refined the Hotkeys and FPS layouts with balanced scope controls, a compact slider, consistent card hover behavior, and a concise risk tooltip.
+- Made the taskbar icon update automatically to match the selected character, using the `.ico` files in `Assets\icons`.
+- Reworked macro importing to read names, descriptions, and tags from AHK comment metadata, generate safe fallback names, and handle duplicates automatically.
+- Added editing for imported macro names, descriptions, FPS tags, and TESTING tags while preserving stable macro IDs and package folders.
+- Reorganized the Dashboard by integrating Quick Controls, Application Mode, and Skip Dialog Behavior into the selected Character Combos card.
+- Improved character and macro card sizing for a cleaner responsive desktop layout.
 
 ## v1.7.4
 
-- Added animated section transitions while preserving the reduced-motion preference.
-- Added an in-app startup update prompt with Update now and Remind me later actions.
-- Made the borderless application window resizable and persisted its position and dimensions.
-- Converted character, macro, hotkey, community, and update content into responsive card grids.
-- Strengthened typography hierarchy, rounded inputs and data containers, and added subtle hover transitions and shadows.
-- Made Administrator-policy source validation independent of Windows CRLF line endings.
-- Added clear retry handling when a running process temporarily locks the staged build folders.
-
-## v1.7.3
-
-- Added a one-time staggered entrance animation for the title bar, sidebar, and main content.
-- Preserved `prefers-reduced-motion` behavior for the startup animation.
+- Added an in-app startup update prompt with `Update now` and `Remind me later` actions.
+- Made the borderless application window resizable and preserved its position and dimensions.
+- Converted the main content areas into responsive card grids and improved interface transitions and visual hierarchy.
 
 ## v1.7.2
 
-- Fixed every interface action being rejected by removing an AutoHotkey v1 text-level NUL check that treated `Chr(0)` as an empty search value.
-- Kept NUL-byte protection by validating command files as raw bytes before decoding them as UTF-8.
-- Added source-validation guards so CI rejects the broken text-level NUL pattern if it is reintroduced.
+- Fixed all interface actions being rejected by an invalid AutoHotkey v1 NUL-character check while preserving raw-byte validation for command files.
 
 ## v1.7.1
 
-- Fixed valid UI bridge commands being rejected on startup by replacing the AutoHotkey v1 control-character regex with a deterministic character check and tolerating UTF-8 BOM input.
-- Prevented engine errors from creating an endless `error -> requestState -> error` notification loop.
-- Added stable error IDs, duplicate-toast suppression, a state-request cooldown, and a cap on simultaneously visible notifications.
-- Restored forced Administrator relaunch through UAC with a `/restart` guard that prevents repeated elevation attempts.
+- Fixed valid UI bridge commands being rejected at startup and added UTF-8 BOM compatibility.
+- Prevented repeated engine errors from creating endless notification loops.
+- Restored reliable Administrator relaunch through UAC without repeated elevation attempts.
 
 ## v1.7.0
 
-- Added a smooth, reduced-motion-aware transition between dark and light themes.
-- Scoped all managed hotkeys to the selected game executable and stop active input when the game loses focus.
-- Removed automatic Administrator elevation from the engine and bundled Skirk macro.
-- Replaced in-place updater copying with a validated staged directory swap and rollback.
-- Added a global command allowlist, payload limits, and centralized line-protocol normalization.
-- Made exported FPS and TESTING tags inherit automatically unless the importer explicitly selects None.
-- Made macro reordering a single atomic registry update and forced the UI to accept the engine result after rollback.
-- Prevented deletion of the last macro for each character in both the UI and engine.
-- Removed unused bridge, engine, and JavaScript helpers and synchronized every inlined runtime copy.
-- Consolidated Discord release notification into the release workflow and expanded CI consistency checks.
+- Scoped managed hotkeys to the selected game executable and stopped active input when the game loses focus.
+- Replaced in-place updates with a validated staged update process with rollback support.
+- Strengthened command validation with an allowlist, payload limits, and centralized protocol normalization.
+- Preserved inherited FPS and TESTING tags during macro export and import.
+- Made macro reordering atomic and prevented deletion of a character's last macro.
 
 ## v1.6.6
 
-- Reserved the missing `S` gameplay key from application hotkey assignment.
-- Centralized hotkey-set validation and atomic startup recovery for invalid or duplicated settings.
-- Added defensive duplicate checks inside every hotkey setter.
-- Corrected the exact filename case for `OpenSans-Semibold.ttf`.
-- Removed unused child-runtime timing and input helpers from `UMM.Engine.ahk`.
-- Initialized `FState` consistently in the child runtime.
-- Displayed GitHub release notes in the update card as safe plain text.
-- Converted source `build-info.json` into a date-free version template.
-- Added pull-request source validation and .NET build CI.
-- Added the MIT license and cumulative Discord release workflow.
+- Reserved the `S` gameplay key from application hotkey assignment.
+- Added centralized hotkey validation, duplicate detection, and automatic recovery from invalid saved settings.
+- Displayed GitHub release notes safely inside the update card.
 
 ## v1.6.5
 
-- Replaced timestamped imported macro IDs and folders with stable names.
-- Limited automatic package recovery to complete manifest-backed packages.
-- Removed the stale repository inventory document.
-- Reworded historical CSS comments to describe current behavior.
-- Added the Open Sans SIL Open Font License and third-party notice.
-- Expanded GitHub issue and pull request templates.
-- Hardened the release workflow with manual dispatch, concurrency control, exact action versions, package verification, and SHA-256 checksums.
+- Replaced timestamp-based imported macro IDs and folders with stable names.
+- Limited automatic package recovery to complete packages containing a valid manifest.
+- Hardened release packaging and added SHA-256 verification.
 
 ## v1.6.4
 
-- Preserved FPS and TESTING tags when recovering copied macro packages from `manifest.ini`.
-- Preserved exported macro metadata when an exported AHK file is imported again.
-- Added a versioned metadata marker to future AHK exports.
-- Replaced the glow/tilt reorder effect with a press, spring-lift, and soft landing animation.
+- Preserved FPS and TESTING tags when recovering or re-importing macro packages.
+- Added versioned metadata markers to exported AHK files.
 
 ## v1.6.3
 
-- Removed the long-press loading/progress line from macro cards.
-- Added a smooth lift, glow, responsive tilt, and drag/drop animation.
-- Added automatic recovery for unregistered `user_*` imported macro folders.
-- Imported macros now receive a portable `manifest.ini` file.
-
-## v1.6.2
-
-- Added a smooth long-press progress animation before macro reordering starts.
-- Added a lifted drag state and a soft drop animation for the active macro card.
-- Added FLIP-based motion so neighboring macro cards slide into their new positions instead of jumping.
-- Added reduced-motion support for the reorder interaction.
+- Added automatic recovery for unregistered imported macro packages.
+- Added a portable `manifest.ini` file to imported macros.
 
 ## v1.6.1
 
-- Fixed the first macro entry being skipped when `Macros/registry.ini` starts with an UTF-8 BOM.
-- Added automatic BOM removal before AutoHotkey v1 reads the registry.
-- Normalized the staged registry to UTF-8 without BOM during every build.
+- Fixed the first macro being skipped when `Macros/registry.ini` starts with a UTF-8 BOM.
 - Restored reliable loading of Mavuika's `CD 3[CDC2FD] (C)` macro.
-
-## v1.5.2

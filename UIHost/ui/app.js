@@ -44,6 +44,14 @@ const translations = {
   inputSettings: "INPUT SETTINGS",
   hotkeysTitle: "Hotkeys",
   hotkeyInfo: "Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.",
+  hotkeyScopeEyebrow: "ACTIVATION SCOPE",
+  hotkeyScopeTitle: "Where hotkeys work",
+  hotkeyScopeHelp: "Choose whether the configured hotkeys respond everywhere or only while the game window is focused.",
+  fpsSettings: "FRAME LIMITER",
+  fpsTitle: "FPS",
+  fpsUnlockerEyebrow: "FPS UNLOCKER",
+  fpsLimiterTitle: "Frame-rate limiter",
+  fpsRiskTooltip: "This feature modifies game memory and may carry compatibility or account risk.",
   launchSettings: "LAUNCH SETTINGS",
   startupTitle: "Startup application",
   selectedExecutable: "SELECTED EXECUTABLE",
@@ -122,9 +130,9 @@ const hotkeyCatalog = [
 ];
 
 let state = {
-  macroEnabled: false,
   soundsEnabled: true,
   macroRunning: false,
+  hotkeyScope: "GameOnly",
   appMode: "CharacterCombos",
   skipStopMode: "Release",
   character: "",
@@ -137,10 +145,17 @@ let state = {
   modeToggleKey: "—",
   autoLaunchPath: "",
   autoLaunchEnabled: true,
+  fpsEnabled: false,
+  fpsTarget: 120,
+  fpsStatus: "disabled",
+  fpsMessage: "Enable the limiter, then start the game.",
+  fpsAvailable: false,
   version: "—"
 };
 
 let captureTarget = null;
+let fpsTargetCommitTimer = 0;
+let fpsTargetEditing = false;
 
 const COMBO_LONG_PRESS_MS = 450;
 const COMBO_PRESS_MOVE_TOLERANCE = 8;
@@ -293,12 +308,25 @@ function applyMessage(message) {
     state = {
       ...state,
       ...message,
-      macroEnabled: boolValue(message.macroEnabled),
       soundsEnabled: boolValue(message.soundsEnabled),
       macroRunning: boolValue(message.macroRunning),
       autoLaunchEnabled: boolValue(message.autoLaunchEnabled)
     };
     render();
+    return;
+  }
+
+  if (message.type === "fpsState") {
+    const parsedTarget = Number(message.fpsTarget);
+    state = {
+      ...state,
+      fpsEnabled: boolValue(message.fpsEnabled),
+      fpsTarget: Number.isFinite(parsedTarget) ? Math.min(420, Math.max(10, Math.round(parsedTarget))) : state.fpsTarget,
+      fpsStatus: String(message.fpsStatus || "disabled"),
+      fpsMessage: String(message.fpsMessage || ""),
+      fpsAvailable: boolValue(message.fpsAvailable)
+    };
+    renderFps();
     return;
   }
 
@@ -452,6 +480,7 @@ function render() {
   renderDashboard();
   renderCharacters();
   renderHotkeys();
+  renderFps();
   renderStartup();
   renderAboutMeta();
   renderUpdateStatus();
@@ -494,16 +523,6 @@ function renderDashboard() {
   soundControl.title = state.soundsEnabled ? "Mute sound feedback" : "Enable sound feedback";
   $("#modeTitle").textContent = state.appMode === "SkipDialogs" ? t("skipDialogs") : t("characterCombos");
   $("#skipBehaviorTitle").textContent = state.skipStopMode === "AnyKey" ? t("untilAnyKey") : t("untilTriggerReleased");
-
-  const macroStateButton = $("#macroStateButton");
-  macroStateButton.textContent = state.macroEnabled ? "ON" : "OFF";
-  macroStateButton.classList.toggle("off", !state.macroEnabled);
-  macroStateButton.classList.toggle("running", state.macroRunning);
-  macroStateButton.disabled = state.macroRunning;
-  macroStateButton.setAttribute("aria-pressed", state.macroEnabled ? "true" : "false");
-  macroStateButton.title = state.macroRunning
-    ? "Release the trigger before changing macro state."
-    : (state.macroEnabled ? "Turn macros OFF" : "Turn macros ON");
 
   const startGameButton = $("#startGameButton");
   const hasExecutable = Boolean(state.autoLaunchPath);
@@ -1056,6 +1075,83 @@ function renderHotkeys() {
   resetButton.title = state.macroRunning
     ? t("releaseBeforeReset")
     : t("resetHotkeysTitle");
+
+  $$('[data-hotkey-scope]').forEach(button => {
+    button.classList.toggle("active", button.dataset.hotkeyScope === state.hotkeyScope);
+    button.disabled = state.macroRunning;
+  });
+
+  const scopeSegmented = $("#hotkeyScopeSegmented");
+  scopeSegmented.classList.toggle("is-disabled", state.macroRunning);
+  $("#hotkeyInfo").textContent = state.hotkeyScope === "Everywhere"
+    ? "Hotkeys are active in every application. Gameplay keys and duplicate assignments are still rejected."
+    : t("hotkeyInfo");
+  requestAnimationFrame(() => updateSegmentedIndicator(scopeSegmented));
+}
+
+function clampFpsTarget(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(420, Math.max(10, Math.round(parsed))) : 120;
+}
+
+function queueFpsTarget(value, immediate = false) {
+  const target = clampFpsTarget(value);
+  state.fpsTarget = target;
+  $("#fpsTargetSlider").value = String(target);
+  $("#fpsTargetInput").value = String(target);
+  renderFpsPresetSelection();
+
+  window.clearTimeout(fpsTargetCommitTimer);
+  if (immediate) {
+    post("setFpsTarget", { value: target });
+    return;
+  }
+
+  fpsTargetCommitTimer = window.setTimeout(() => {
+    fpsTargetCommitTimer = 0;
+    post("setFpsTarget", { value: target });
+  }, 90);
+}
+
+function renderFpsPresetSelection() {
+  $$('[data-fps-preset]').forEach(button => {
+    button.classList.toggle("active", Number(button.dataset.fpsPreset) === state.fpsTarget);
+  });
+}
+
+function renderFps() {
+  const toggle = $("#fpsUnlockToggle");
+  if (!toggle) return;
+
+  toggle.checked = state.fpsEnabled;
+  toggle.disabled = !state.fpsAvailable;
+  toggle.closest(".fps-enable-switch").title = state.fpsAvailable
+    ? (state.fpsEnabled ? "Disable FPS unlocker" : "Enable FPS unlocker")
+    : "The native FPS component is not available in this build.";
+
+  if (!fpsTargetEditing) {
+    $("#fpsTargetInput").value = String(state.fpsTarget);
+    $("#fpsTargetSlider").value = String(state.fpsTarget);
+  }
+
+  const controlsDisabled = !state.fpsAvailable;
+  $("#fpsTargetInput").disabled = controlsDisabled;
+  $("#fpsTargetSlider").disabled = controlsDisabled;
+  $$('[data-fps-preset]').forEach(button => { button.disabled = controlsDisabled; });
+  renderFpsPresetSelection();
+
+  const labels = {
+    disabled: "Disabled",
+    unavailable: "Unavailable",
+    waiting: "Waiting for game",
+    connecting: "Connecting",
+    active: "Active",
+    error: "Unavailable for this game version"
+  };
+  const status = String(state.fpsStatus || "disabled").toLowerCase();
+  $("#fpsStatus").dataset.status = status;
+  $("#fpsStatusLabel").textContent = labels[status] || "FPS unlocker";
+  $("#fpsStatusMessage").textContent = state.fpsMessage || "Enable the limiter, then start the game.";
 }
 
 function renderStartup() {
@@ -1488,12 +1584,6 @@ $('#titlebar').addEventListener('mousedown', event => {
   if (!event.target.closest('button')) post('windowDrag');
 });
 
-$('#macroStateButton').addEventListener('click', () => {
-  if (!state.macroRunning) {
-    post('setMacroEnabled', { value: !state.macroEnabled });
-  }
-});
-
 $('#startGameButton').addEventListener('click', () => {
   post('startGame');
 });
@@ -1515,6 +1605,41 @@ $('#autoLaunchToggle').addEventListener('change', event => {
 $('#resetHotkeysButton').addEventListener('click', () => {
   if (!state.macroRunning) post('resetHotkeys');
 });
+$$('[data-hotkey-scope]').forEach(button => button.addEventListener('click', () => {
+  if (state.macroRunning) return;
+  previewSegmentedSelection(button);
+  post('setHotkeyScope', { value: button.dataset.hotkeyScope });
+}));
+$('#fpsUnlockToggle').addEventListener('change', event => {
+  post('setFpsUnlockEnabled', { value: event.target.checked });
+});
+$('#fpsTargetSlider').addEventListener('pointerdown', () => { fpsTargetEditing = true; });
+$('#fpsTargetSlider').addEventListener('input', event => queueFpsTarget(event.target.value));
+$('#fpsTargetSlider').addEventListener('change', event => {
+  fpsTargetEditing = false;
+  queueFpsTarget(event.target.value, true);
+});
+$('#fpsTargetSlider').addEventListener('pointercancel', () => {
+  fpsTargetEditing = false;
+  renderFps();
+});
+$('#fpsTargetInput').addEventListener('focus', () => { fpsTargetEditing = true; });
+$('#fpsTargetInput').addEventListener('input', event => {
+  const parsed = Number(event.target.value);
+  if (Number.isFinite(parsed) && parsed >= 10 && parsed <= 420) queueFpsTarget(parsed);
+});
+$('#fpsTargetInput').addEventListener('change', event => {
+  fpsTargetEditing = false;
+  queueFpsTarget(event.target.value, true);
+});
+$('#fpsTargetInput').addEventListener('blur', event => {
+  if (!fpsTargetEditing) return;
+  fpsTargetEditing = false;
+  queueFpsTarget(event.target.value, true);
+});
+$$('[data-fps-preset]').forEach(button => button.addEventListener('click', () => {
+  queueFpsTarget(button.dataset.fpsPreset, true);
+}));
 $('#themeToggle').addEventListener('click', toggleTheme);
 $$('[data-community-link]').forEach(button => button.addEventListener('click', () => openCommunityLink(button.dataset.communityLink)));
 $('#checkUpdateButton').addEventListener('click', () => post('checkForUpdates'));

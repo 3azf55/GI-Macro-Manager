@@ -3,10 +3,6 @@
 A Windows macro manager built with **AutoHotkey v1**, **C# WinForms**, and **WebView2**.
 
 GI Macro Manager provides a modern interface for organizing, importing, running, exporting, deleting, and reordering macro packages. Characters and macros are loaded dynamically from the catalog rather than being hard-coded into the engine.
-<p align="center">
-  <img src="assets/images/app-preview.png" alt="Dashboard" width="48%">
-  <img src="assets/images/app-preview2.png" alt="Settings" width="48%">
-</p>
 
 ## Features
 
@@ -17,7 +13,8 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - Stable package names for imported macros
 - Editable macro names, descriptions, FPS tags, and TESTING tags
 - Add, export, delete, and reorder macro packages
-- Configurable, conflict-checked hotkeys active only while the selected game window is focused
+- Configurable, conflict-checked hotkeys that can work everywhere or only while the selected game window is focused
+- Optional 10–420 FPS limiter with presets and live connection status
 - Skip Dialogs mode and optional game launcher
 - GitHub release checks with download and installation support
 - System tray controls and Discord community access
@@ -38,6 +35,7 @@ GI Macro Manager provides a modern interface for organizing, importing, running,
 - AutoHotkey **v1.1 Unicode**
 - Microsoft Edge WebView2 Runtime
 - Node.js for source validation
+- Visual Studio 2022 with the **Desktop development with C++** workload and x64 tools
 
 ## Download
 
@@ -54,6 +52,8 @@ After downloading a release:
 ```bat
 scripts\build-and-stage.cmd
 ```
+
+The build script compiles the native x64 FPS component from source before publishing the WebView2 host.
 
 The completed runtime package is created in `dist\`. Start it with:
 
@@ -85,6 +85,7 @@ See [Macro Packages](docs/MACRO_PACKAGES.md) for the package format and import b
 .
 ├── UMM.Engine.ahk
 ├── UIHost/
+├── FpsUnlocker/
 ├── Macros/
 ├── Assets/
 ├── scripts/
@@ -97,6 +98,8 @@ For a technical overview, see [Architecture](docs/ARCHITECTURE.md).
 
 Imported AutoHotkey files are executable scripts. Macro Manager requests Administrator permission at startup, so imported macros inherit elevated access. Only import scripts from sources you trust and review their contents before running them.
 
+The optional FPS limiter loads a native component into the game process and writes the selected frame-rate target in memory. It is disabled by default, may stop working after game updates, and must not be treated as risk-free or officially supported by the game publisher.
+
 The engine performs one guarded UAC relaunch so it can interact consistently with games running at elevated integrity. If elevation is denied or still unavailable after the guarded restart, Macro Manager exits instead of relaunching repeatedly.
 
 Read the full [Security Policy](SECURITY.md).
@@ -108,6 +111,8 @@ Contributions and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.m
 ## Credits
 
 Macro timing references are listed in [Macro Timing Credits](docs/MACRO_CREDITS.md).
+
+The FPS limiter is adapted from [PowerPaimon](https://github.com/catteol/PowerPaimon) at commit `09eddc6393714900cca0fb55bb83cb490acf09b8`. Its MIT license is preserved under `FpsUnlocker/LICENSE-UPSTREAM.txt`.
 
 ## Community
 

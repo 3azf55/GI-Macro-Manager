@@ -8,6 +8,7 @@ $Macros = Join-Path $PackageRoot "Macros"
 $Dist = Join-Path $PackageRoot "dist"
 $PublishTemp = Join-Path $PackageRoot ".publish-temp"
 $Runtime = "win-x64"
+$FpsBuildScript = Join-Path $PSScriptRoot "build-fps-unlocker.ps1"
 
 function Invoke-DotNet {
     param(
@@ -62,6 +63,20 @@ if (-not (Test-Path $NuGetConfig)) {
     throw "NuGet.Config was not found: $NuGetConfig"
 }
 
+# Ensure UnlockerStub.dll is available in FpsUnlocker\Native\ for UMM.UI.csproj validation
+$CompiledDll = Join-Path $PackageRoot "FpsUnlocker\Native\UnlockerStub\UnlockerStub.dll"
+$TargetDllFolder = Join-Path $PackageRoot "FpsUnlocker\Native"
+$TargetDll = Join-Path $TargetDllFolder "UnlockerStub.dll"
+
+if (Test-Path $CompiledDll) {
+    Copy-Item $CompiledDll $TargetDll -Force
+} else {
+    throw "UnlockerStub.dll missing at $CompiledDll. Please compile it using cl.exe first."
+}
+
+# Bypass external build script
+# & $FpsBuildScript
+
 if (Test-Path $PublishTemp) {
     Remove-DirectoryWithRetry -Path $PublishTemp
 }
@@ -101,6 +116,14 @@ try {
     Copy-Item (Join-Path $PackageRoot "LICENSE") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "THIRD_PARTY_NOTICES.md") $PublishTemp -Force
 
+    $FpsNoticeOutput = Join-Path $PublishTemp "FpsUnlocker"
+    New-Item $FpsNoticeOutput -ItemType Directory -Force | Out-Null
+    Copy-Item (Join-Path $PackageRoot "FpsUnlocker\LICENSE-UPSTREAM.txt") $FpsNoticeOutput -Force
+
+    $NativeOutput = Join-Path $PublishTemp "Native"
+    New-Item $NativeOutput -ItemType Directory -Force | Out-Null
+    Copy-Item $TargetDll $NativeOutput -Force
+
     $DocsOutput = Join-Path $PublishTemp "docs"
     New-Item $DocsOutput -ItemType Directory -Force | Out-Null
     Copy-Item (Join-Path $PackageRoot "docs\MACRO_CREDITS.md") $DocsOutput -Force
@@ -136,8 +159,6 @@ try {
         throw "Macros folder was not found: $Macros"
     }
 
-    # AutoHotkey v1 can skip the first INI section when registry.ini starts
-    # with an UTF-8 BOM. Always stage the catalog as UTF-8 without BOM.
     $StagedRegistry = Join-Path $PublishTemp "Macros\registry.ini"
     if (-not (Test-Path $StagedRegistry)) {
         throw "The staged macro registry was not found: $StagedRegistry"
@@ -164,6 +185,8 @@ try {
     $FinalUi = Join-Path $Dist "ui\index.html"
     $FinalLicense = Join-Path $Dist "LICENSE"
     $FinalCredits = Join-Path $Dist "docs\MACRO_CREDITS.md"
+    $FinalFpsStub = Join-Path $Dist "Native\UnlockerStub.dll"
+    $FinalFpsLicense = Join-Path $Dist "FpsUnlocker\LICENSE-UPSTREAM.txt"
 
     $RequiredOutputs = @(
         $FinalExe,
@@ -171,7 +194,9 @@ try {
         $FinalRegistry,
         $FinalUi,
         $FinalLicense,
-        $FinalCredits
+        $FinalCredits,
+        $FinalFpsStub,
+        $FinalFpsLicense
     )
 
     foreach ($RequiredOutput in $RequiredOutputs) {

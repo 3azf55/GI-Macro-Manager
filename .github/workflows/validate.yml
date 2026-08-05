@@ -40,6 +40,10 @@ jobs:
         shell: pwsh
         run: dotnet restore .\UIHost\UMM.UI.csproj --configfile .\NuGet.Config -r win-x64
 
+      - name: Build native FPS component
+        shell: pwsh
+        run: .\scripts\build-fps-unlocker.ps1
+
       - name: Build UI host
         shell: pwsh
         run: dotnet build .\UIHost\UMM.UI.csproj -c Release -r win-x64 --no-restore

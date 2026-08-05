@@ -7,7 +7,7 @@
 The AutoHotkey v1 engine owns:
 
 - dynamic catalog loading;
-- game-window-scoped hotkey registration;
+- configurable global or game-window-scoped hotkey registration;
 - Trigger down/up handling;
 - child macro process lifecycle;
 - input cleanup through `ReleaseAll()`;
@@ -24,6 +24,12 @@ A .NET 8 WinForms application hosting Microsoft Edge WebView2.
 
 It loads the files under `UIHost/ui` and exchanges commands/state with the
 engine through files under the runtime `bridge` folder.
+
+`UIHost/FpsUnlockService.cs` owns the optional FPS limiter settings, game-process discovery, shared-memory state, and native hook lifecycle. FPS commands remain inside the C# host and are not forwarded to the AutoHotkey engine.
+
+### `FpsUnlocker`
+
+The x64 `UnlockerStub` is built from source during Windows builds. After the user enables the feature, the C# host connects it to a supported game window and exchanges the enabled state and 10–420 FPS target through an application-specific shared-memory block. The component reports an error instead of writing when its game-version pattern cannot be resolved.
 
 ### `Macros`
 
@@ -52,12 +58,13 @@ and runs input cleanup.
 
 `scripts/build-and-stage.ps1`:
 
-1. restores and publishes `UIHost`;
-2. copies `UMM.Engine.ahk`;
-3. copies UI files, assets, and macros;
-4. creates `bridge/commands`;
-5. validates essential files;
-6. moves the staged output to `dist`.
+1. builds the native x64 FPS component;
+2. restores and publishes `UIHost`;
+3. copies `UMM.Engine.ahk`;
+4. copies UI files, assets, and macros;
+5. creates `bridge/commands`;
+6. validates essential files, including `Native/UnlockerStub.dll`;
+7. moves the staged output to `dist`.
 
 
 ## GitHub update system

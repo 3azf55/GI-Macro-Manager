@@ -32,3 +32,12 @@ Desktop.ini
 .DS_Store
 .vscode/
 .idea/
+# Native FPS Unlocker build outputs
+FpsUnlocker/Native/UnlockerStub.dll
+FpsUnlocker/Native/UnlockerStub/*.dll
+FpsUnlocker/Native/UnlockerStub/*.obj
+FpsUnlocker/Native/UnlockerStub/*.lib
+FpsUnlocker/Native/UnlockerStub/*.exp
+FpsUnlocker/Native/UnlockerStub/*.pdb
+FpsUnlocker/Native/UnlockerStub/bin/
+FpsUnlocker/Native/UnlockerStub/obj/

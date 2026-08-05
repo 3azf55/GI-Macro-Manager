@@ -19,12 +19,24 @@ function Assert-True {
 }
 
 function Get-ExactRelativeFiles {
-    Get-ChildItem $Root -Recurse -File -Force |
+    $rootFullPath = [System.IO.Path]::GetFullPath($Root)
+    $rootPrefix = $rootFullPath.TrimEnd([char[]]"\/") +
+        [System.IO.Path]::DirectorySeparatorChar
+
+    Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
         Where-Object {
             $_.FullName -notmatch '[\\/](\.git|bin|obj|dist|\.publish-temp|bridge)[\\/]'
         } |
         ForEach-Object {
-            [System.IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
+            $fullPath = [System.IO.Path]::GetFullPath($_.FullName)
+
+            if (-not $fullPath.StartsWith(
+                    $rootPrefix,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Source file is outside project root: $fullPath"
+            }
+
+            $fullPath.Substring($rootPrefix.Length).Replace('\', '/')
         }
 }
 
@@ -44,8 +56,14 @@ $runtimePath = Join-Path $Root 'Macros\Runtime\MacroRuntime.ahk'
 $releaseWorkflowPath = Join-Path $Root '.github\workflows\release.yml'
 $licensePath = Join-Path $Root 'LICENSE'
 $creditsPath = Join-Path $Root 'docs\MACRO_CREDITS.md'
+$fpsServicePath = Join-Path $Root 'UIHost\FpsUnlockService.cs'
+$fpsNativePath = Join-Path $Root 'FpsUnlocker\Native\UnlockerStub\dllmain.cpp'
+$fpsProjectPath = Join-Path $Root 'FpsUnlocker\Native\UnlockerStub\UnlockerStub.vcxproj'
+$fpsLicensePath = Join-Path $Root 'FpsUnlocker\LICENSE-UPSTREAM.txt'
+$fpsBuildScriptPath = Join-Path $Root 'scripts\build-fps-unlocker.ps1'
+$noticesPath = Join-Path $Root 'THIRD_PARTY_NOTICES.md'
 
-foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $mainFormPath, $bridgeProtocolPath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath)) {
+foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $mainFormPath, $bridgeProtocolPath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath, $fpsServicePath, $fpsNativePath, $fpsProjectPath, $fpsLicensePath, $fpsBuildScriptPath, $noticesPath)) {
     Assert-True (Test-Path $required -PathType Leaf) "Required source file is missing: $required"
 }
 
@@ -249,6 +267,21 @@ Assert-True ($indexText.Contains('class="hero-dashboard-content"') -and `
     'Quick Controls and Skip Dialog Behavior must remain embedded in the Character Combos card.'
 Assert-True (-not $indexText.Contains('data-window-action="maximize"')) `
     'The fixed application window must not display a maximize control.'
+Assert-True (-not $indexText.Contains('macroStateButton') -and `
+            -not $appJsText.Contains('setMacroEnabled') -and `
+            -not $engineText.Contains('MacroEnabled') -and `
+            -not $engineText.Contains('ToggleScriptEnabled')) `
+    'The removed global macro ON/OFF control must not return in the UI, bridge, engine, or tray.'
+Assert-True ($indexText.Contains('data-hotkey-scope="Everywhere"') -and `
+            $indexText.Contains('data-hotkey-scope="GameOnly"') -and `
+            $engineText.Contains('SetHotkeyScope(scopeName)') -and `
+            $engineText.Contains('Settings, HotkeyScope, GameOnly')) `
+    'Hotkeys must provide persisted Everywhere and Game only activation scopes.'
+Assert-True ($indexText.Contains('data-page-panel="fps"') -and `
+            $indexText.Contains('id="fpsTargetSlider"') -and `
+            $appJsText.Contains('post("setFpsTarget"') -and `
+            $appJsText.Contains("post('setFpsUnlockEnabled'")) `
+    'The FPS page must expose the limiter slider and enable commands.'
 $mainFormText = [System.IO.File]::ReadAllText($mainFormPath)
 Assert-True ($mainFormText.Contains('MaximizeBox = false;')) `
     'The native application window must keep maximize disabled.'
@@ -293,10 +326,11 @@ Assert-True ([regex]::IsMatch($stylesText, '(?s)\.hero-settings-grid\s*\{[^}]*gr
     'Application Mode and Skip Dialog Behavior must remain equal-sized controls in the bottom row.'
 Assert-True ([regex]::IsMatch($stylesText, '(?s)\.dashboard-layout\s*\{[^}]*align-items:\s*start;')) `
     'Dashboard cards must size to their content instead of stretching to the tallest card in the row.'
-$hotkeyHoverRule = [regex]::Match($stylesText, '(?s)\.hotkey-card:hover\s*\{([^}]*)\}')
-Assert-True $hotkeyHoverRule.Success 'The Hotkeys page must define a hover treatment for its cards.'
-Assert-True (-not $hotkeyHoverRule.Groups[1].Value.Contains('transform:')) `
-    'Hotkey-card hover must not move the card, because crossing its transformed boundary causes repeated hover jitter.'
+$hotkeyHoverRule = [regex]::Match($stylesText, '(?s)\.hotkey-card:hover::before\s*\{([^}]*)\}')
+Assert-True ($hotkeyHoverRule.Success -and $hotkeyHoverRule.Groups[1].Value.Contains('transform: translateY(-3px)')) `
+    'Hotkey cards must provide the requested visual hover lift through a stationary pseudo-element.'
+Assert-True ($stylesText.Contains('.hotkey-card:hover > * { transform: translateY(-3px); }')) `
+    'Hotkey-card content must lift with its visual surface.'
 Assert-True ($appJsText.Contains('function ensureHotkeyCards()') -and `
             $appJsText.Contains('if (grid.dataset.initialized === "1") return;')) `
     'Hotkey cards must keep stable DOM nodes instead of being recreated during every state update.'
@@ -307,6 +341,24 @@ Assert-True ($rawStatePostCount -eq 1) `
     'All state requests must pass through the single throttled requestState() helper.'
 Assert-True (-not (Test-Path (Join-Path $Root '.github\workflows\discord-release.yml'))) `
     'Discord notification must remain in release.yml so GITHUB_TOKEN publishing can trigger it.'
+
+$fpsServiceText = [System.IO.File]::ReadAllText($fpsServicePath)
+$fpsNativeText = [System.IO.File]::ReadAllText($fpsNativePath)
+$fpsProjectText = [System.IO.File]::ReadAllText($fpsProjectPath)
+$fpsLicenseText = [System.IO.File]::ReadAllText($fpsLicensePath)
+$noticesText = [System.IO.File]::ReadAllText($noticesPath)
+$fpsGuid = '6B78D5B5-2C60-4A7B-9F52-7F8F8B0E1750'
+Assert-True ($fpsServiceText.Contains($fpsGuid) -and $fpsNativeText.Contains($fpsGuid)) `
+    'The managed and native FPS components must use the same application-specific shared-memory name.'
+Assert-True ($fpsServiceText.Contains('Math.Clamp(target, 10, 420)') -and `
+            $fpsNativeText.Contains('std::clamp(static_cast<std::int32_t>(ipc->Framerate), 10, 420)')) `
+    'The managed and native FPS limits must both remain 10 through 420.'
+Assert-True ($fpsProjectText.Contains('<PlatformToolset>v143</PlatformToolset>') -and `
+            $fpsProjectText.Contains('<RuntimeLibrary>MultiThreaded</RuntimeLibrary>')) `
+    'The native FPS component must remain an x64 static-runtime Visual Studio build.'
+Assert-True ($fpsLicenseText.Contains('Copyright (c) 2021-Present 34736384') -and `
+            $noticesText.Contains('09eddc6393714900cca0fb55bb83cb490acf09b8')) `
+    'PowerPaimon upstream copyright, license, and pinned commit notice must remain present.'
 
 $releaseWorkflowText = [System.IO.File]::ReadAllText($releaseWorkflowPath)
 Assert-True ([regex]::IsMatch($releaseWorkflowText, '(?m)^  notify-discord:\s*$')) `
