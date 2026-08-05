@@ -64,9 +64,11 @@ if (-not (Test-Path $NuGetConfig)) {
 }
 
 # Ensure UnlockerStub.dll is available in FpsUnlocker\Native\ for UMM.UI.csproj validation
-$CompiledDll = Join-Path $PackageRoot "FpsUnlocker\Native\UnlockerStub\UnlockerStub.dll"
+$CompiledDll = Join-Path $PackageRoot "FpsUnlocker\Native\UnlockerStub\bin\x64\Release\UnlockerStub.dll"
 $TargetDllFolder = Join-Path $PackageRoot "FpsUnlocker\Native"
 $TargetDll = Join-Path $TargetDllFolder "UnlockerStub.dll"
+
+New-Item -ItemType Directory -Path $TargetDllFolder -Force | Out-Null
 
 if (Test-Path $CompiledDll) {
     Copy-Item $CompiledDll $TargetDll -Force
