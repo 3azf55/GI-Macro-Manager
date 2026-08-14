@@ -385,21 +385,26 @@ foreach ($removedCopy in $removedMacroEditorCopy) {
         "Removed macro-editor copy returned: $removedCopy"
 }
 $toolbarStart = $indexText.IndexOf('class="macro-command-bar"', [StringComparison]::Ordinal)
-$groupMatches = [regex]::Matches($indexText, 'class="macro-command-group"')
+$groupMatches = [regex]::Matches($indexText, 'class="macro-command-group(?:\s+[^\"]*)?"')
 $importButtonIndex = $indexText.IndexOf('id="addMacroButton"', [StringComparison]::Ordinal)
 $exportButtonIndex = $indexText.IndexOf('id="exportMacroButton"', [StringComparison]::Ordinal)
 $createButtonIndex = $indexText.IndexOf('id="createMacroButton"', [StringComparison]::Ordinal)
 $editButtonIndex = $indexText.IndexOf('id="editMacroButton"', [StringComparison]::Ordinal)
 $deleteButtonIndex = $indexText.IndexOf('id="deleteMacroButton"', [StringComparison]::Ordinal)
+$toolbarSpacerIndex = $indexText.IndexOf('class="macro-command-spacer"', [StringComparison]::Ordinal)
+$dangerGroupIndex = $indexText.IndexOf('macro-command-danger-group', [StringComparison]::Ordinal)
 Assert-True ($toolbarStart -ge 0 -and `
-            $groupMatches.Count -eq 2 -and `
-            $importButtonIndex -gt $deleteButtonIndex -and `
-            $exportButtonIndex -gt $importButtonIndex) `
-    'Import and export must remain together and in that order.'
-Assert-True ($createButtonIndex -gt $toolbarStart -and `
+            $groupMatches.Count -eq 3 -and `
+            $createButtonIndex -gt $toolbarStart -and `
             $editButtonIndex -gt $createButtonIndex -and `
-            $deleteButtonIndex -gt $editButtonIndex) `
-    'Create, edit, and delete must remain together and in that order.'
+            $importButtonIndex -gt $editButtonIndex -and `
+            $exportButtonIndex -gt $importButtonIndex) `
+    'Create/Edit and Import/Export must remain grouped and in their expected order.'
+Assert-True ($createButtonIndex -gt $toolbarStart -and `
+            $toolbarSpacerIndex -gt $exportButtonIndex -and `
+            $dangerGroupIndex -gt $toolbarSpacerIndex -and `
+            $deleteButtonIndex -gt $dangerGroupIndex) `
+    'Delete must remain isolated at the far end of the macro toolbar.'
 Assert-True ($indexText.Contains('M12 4v11') -and $indexText.Contains('M12 15V4')) `
     'Import and export must keep visually distinct inward and outward arrow icons.'
 Assert-True (-not $indexText.Contains('<span>Create</span>') -and `
@@ -518,8 +523,10 @@ Assert-True ($indexText.Contains('draggable="false"') -and `
             $stylesText.Contains('pointer-events: none;')) `
     'Character portraits must not expose native selection or dragging.'
 Assert-True ([regex]::IsMatch($stylesText, '(?s)\.combo-panel-footer\s*\{[^}]*overflow-x:\s*auto;') -and `
-            [regex]::IsMatch($stylesText, '(?s)\.macro-command-bar\s*\{[^}]*display:\s*inline-flex;[^}]*flex:\s*0\s+0\s+auto;')) `
-    'Character macro actions must remain compact and on one non-wrapping toolbar row.'
+            [regex]::IsMatch($stylesText, '(?s)\.macro-command-bar\s*\{[^}]*width:\s*100%;[^}]*display:\s*inline-flex;[^}]*flex:\s*1\s+0\s+auto;') -and `
+            $stylesText.Contains('.macro-command-spacer { min-width: 20px; flex: 1 1 auto; }') -and `
+            $stylesText.Contains('.macro-command-danger-group {')) `
+    'Character macro actions must fill one row while keeping Delete visually isolated.'
 Assert-True ($stylesText.Contains('@media (prefers-reduced-motion: reduce)')) `
     'Interface animations must provide a reduced-motion fallback.'
 Assert-True ($stylesText.Contains('aspect-ratio: 1 / 1')) `
