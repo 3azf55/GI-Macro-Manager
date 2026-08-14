@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Macro Manager</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=1.7.6-ui-refresh-1" />
 </head>
 <body class="app-starting">
   <div class="app-shell">
@@ -22,6 +22,7 @@
         </span>
         <div class="window-controls" aria-label="Window controls">
           <button class="window-button minimize" data-window-action="minimize" aria-label="Minimize interface" title="Minimize interface"><span class="window-glyph" aria-hidden="true"></span></button>
+          <button class="window-button maximize" data-window-action="maximize" aria-label="Maximize interface" title="Maximize interface" aria-pressed="false"><span class="window-glyph" aria-hidden="true"></span></button>
           <button class="window-button close" data-window-action="close" aria-label="Close interface" title="Close interface"><span class="window-glyph" aria-hidden="true"></span></button>
         </div>
       </div>
@@ -81,7 +82,7 @@
             <div class="hero-dashboard-content">
               <div class="hero-dashboard-top">
                 <div class="hero-image-frame">
-                  <img id="heroImage" alt="Current selection" />
+                  <img id="heroImage" alt="Current selection" draggable="false" />
                   <div id="heroFallback" class="image-fallback">MM</div>
                 </div>
 
@@ -137,7 +138,7 @@
 
       <section class="page" data-page-panel="characters">
         <div class="page-heading">
-          <div><span class="eyebrow" data-i18n="characterLibrary">CHARACTER LIBRARY</span><h1 data-i18n="charactersTitle">Characters & combos</h1></div>
+          <div><span class="eyebrow" data-i18n="characterLibrary">CHARACTER LIBRARY</span><h1 data-i18n="charactersTitle">Characters &amp; Combos</h1></div>
         </div>
         <div id="characterGrid" class="character-grid"></div>
         <article class="surface-card combo-panel">
@@ -147,24 +148,45 @@
           </div>
           <div id="comboList" class="combo-list"></div>
           <div class="combo-panel-footer">
-            <button class="primary-button combo-add-action" id="addMacroButton" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
-              <span>Import macro</span>
-            </button>
-            <div class="combo-manage-actions" aria-label="Macro actions">
-              <button class="combo-tool-button" id="editMacroButton" type="button" aria-label="Edit selected macro">
-                <svg class="stroke-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m4 20 4.2-1 10.9-10.9a2.1 2.1 0 0 0-3-3L5.2 16 4 20Zm10.8-13.6 3 3"/>
-                </svg>
-              </button>
-              <button class="combo-tool-button" id="exportMacroButton" type="button" aria-label="Export selected macro">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9l3.5-3.5 1.4 1.4L12 15.8 6.1 9.9l1.4-1.4L11 12V3Zm-6 14h2v2h10v-2h2v4H5v-4Z"/></svg>
-              </button>
-              <button class="combo-tool-button combo-tool-delete" id="deleteMacroButton" type="button" aria-label="Delete selected macro">
-                <svg class="stroke-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>
-                </svg>
-              </button>
+            <div class="macro-command-bar" role="toolbar" aria-label="Macro actions">
+              <div class="macro-command-group" role="group" aria-label="Manage macros">
+                <button class="macro-command-button macro-command-create" id="createMacroButton" type="button" aria-label="Create macro" title="Create macro">
+                  <svg class="macro-command-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  <span class="visually-hidden">Create macro</span>
+                </button>
+                <button class="macro-command-button" id="editMacroButton" type="button" aria-label="Edit selected macro" title="Edit selected macro">
+                  <svg class="macro-command-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M13.5 6.5 17.5 10.5M4 20l4.35-1.05L19 8.3a2.83 2.83 0 0 0-4-4L4.35 14.95 4 20Z"/>
+                  </svg>
+                  <span class="visually-hidden">Edit selected macro</span>
+                </button>
+              </div>
+              <span class="macro-command-separator" aria-hidden="true"></span>
+              <div class="macro-command-group" role="group" aria-label="Transfer macros">
+                <button class="macro-command-button" id="addMacroButton" type="button" aria-label="Import AHK macro" title="Import AHK macro">
+                  <svg class="macro-command-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M5 18v2h14v-2M12 4v11M8 11l4 4 4-4"/>
+                  </svg>
+                  <span class="visually-hidden">Import AHK macro</span>
+                </button>
+                <button class="macro-command-button" id="exportMacroButton" type="button" aria-label="Export selected macro" title="Export selected macro">
+                  <svg class="macro-command-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M5 18v2h14v-2M12 15V4M8 8l4-4 4 4"/>
+                  </svg>
+                  <span class="visually-hidden">Export selected macro</span>
+                </button>
+              </div>
+              <span class="macro-command-spacer" aria-hidden="true"></span>
+              <div class="macro-command-group macro-command-danger-group" role="group" aria-label="Destructive macro actions">
+                <button class="macro-command-button macro-command-delete" id="deleteMacroButton" type="button" aria-label="Delete selected macro" title="Delete selected macro">
+                  <svg class="macro-command-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M4 7h16M9 7V4h6v3M7 7l.8 13h8.4L17 7M10 11v5M14 11v5"/>
+                  </svg>
+                  <span class="visually-hidden">Delete selected macro</span>
+                </button>
+              </div>
             </div>
           </div>
         </article>
@@ -188,7 +210,7 @@
           </div>
         </article>
         <div id="hotkeyGrid" class="hotkey-grid"></div>
-        <div class="info-banner" id="hotkeyInfo">Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.</div>
+        <div class="info-banner" id="hotkeyInfo">Gameplay keys and duplicate assignments are rejected.</div>
       </section>
 
       <section class="page" data-page-panel="fps">
@@ -347,48 +369,132 @@
   </div>
 
 
-  <div class="modal-backdrop hidden" id="macroEditModal">
-    <form class="hotkey-modal import-modal" id="macroEditForm">
-      <span class="eyebrow">EDIT MACRO</span>
-      <h2 id="macroEditTitle">Edit macro</h2>
+  <div class="modal-backdrop macro-editor-backdrop hidden" id="macroEditorModal">
+    <form class="macro-editor-shell" id="macroEditorForm" role="dialog" aria-modal="true" aria-labelledby="macroEditorTitle">
+      <header class="macro-editor-header">
+        <div class="macro-editor-heading">
+          <h2 id="macroEditorTitle">Edit macro</h2>
+        </div>
+        <div class="macro-editor-header-actions">
+          <button class="macro-editor-details-toggle" id="toggleMacroDetailsButton" type="button" aria-pressed="false" title="Collapse macro details">Collapse</button>
+          <button class="macro-editor-close" id="closeMacroEditorButton" type="button" aria-label="Close editor">×</button>
+        </div>
+      </header>
 
-      <div class="import-target" aria-label="Macro character">
-        <span>Character</span>
-        <strong id="macroEditCharacter">—</strong>
+      <div class="macro-editor-content">
+        <aside class="macro-editor-details" aria-label="Macro details">
+          <div class="macro-editor-character">
+            <span>Character</span>
+            <strong id="macroEditorCharacter">—</strong>
+          </div>
+
+          <label class="macro-editor-field">
+            <span>Macro name</span>
+            <input id="macroEditorName" type="text" maxlength="60" autocomplete="off" required />
+          </label>
+
+          <label class="macro-editor-field">
+            <span>Description <small class="macro-field-note">(Optional)</small></span>
+            <input id="macroEditorDescription" type="text" maxlength="80" autocomplete="off" />
+          </label>
+
+          <div class="macro-editor-tag-row">
+            <label class="macro-editor-field macro-editor-fps-field">
+              <span>FPS Tag <small class="macro-field-note">(Optional)</small></span>
+              <select id="macroEditorFpsTag">
+                <option value="">None</option>
+                <option value="60 FPS">60 FPS</option>
+                <option value="120 FPS">120 FPS</option>
+                <option value="240 FPS">240 FPS</option>
+              </select>
+            </label>
+
+            <label class="macro-editor-testing" for="macroEditorTestingTag" tabindex="0" aria-describedby="macroTestingTooltip">
+              <input id="macroEditorTestingTag" type="checkbox" />
+              <strong>Testing</strong>
+              <span class="macro-testing-tooltip" id="macroTestingTooltip" role="tooltip">Mark this macro as experimental</span>
+            </label>
+          </div>
+
+          <div class="macro-trigger-field">
+            <div class="macro-trigger-actions">
+              <button id="macroTriggerCaptureButton" type="button"><strong id="macroTriggerValue">Choose custom hotkey</strong></button>
+              <button id="macroTriggerClearButton" type="button" aria-label="Clear custom hotkey" title="Clear custom hotkey">×</button>
+            </div>
+          </div>
+
+          <section class="macro-recorder" id="macroRecorderPanel" aria-labelledby="macroRecorderTitle">
+            <div class="macro-recorder-heading">
+              <span class="macro-recorder-dot" aria-hidden="true"></span>
+              <div>
+                <strong id="macroRecorderTitle">Input recorder</strong>
+                <small id="macroRecorderStatus" aria-live="polite">Ready</small>
+              </div>
+            </div>
+            <button class="macro-recorder-toggle" id="macroRecorderToggleButton" type="button">Start recording</button>
+
+            <div class="macro-recorder-settings">
+              <label class="macro-recorder-window">
+                <input id="macroRecorderLastWindow" type="checkbox" checked />
+                <span>Keep only the last</span>
+                <input id="macroRecorderWindowSeconds" type="number" min="1" max="600" step="1" value="30" aria-label="Recording window in seconds" />
+                <span>seconds</span>
+              </label>
+              <details class="macro-recorder-key-filter">
+                <summary>Count selected keys only</summary>
+                <div class="macro-recorder-key-actions">
+                  <button id="macroRecorderSelectAll" type="button">All</button>
+                  <button id="macroRecorderSelectNone" type="button">None</button>
+                </div>
+                <div class="macro-recorder-keys" id="macroRecorderKeys"></div>
+              </details>
+            </div>
+          </section>
+
+          <div class="macro-editor-warning hidden" id="macroEditorWarning"></div>
+        </aside>
+
+        <section class="macro-sequence-panel" aria-labelledby="macroSequenceTitle">
+          <div class="macro-sequence-heading">
+            <div>
+              <span class="eyebrow">ACTION SEQUENCE</span>
+              <h3 id="macroSequenceTitle">Timeline</h3>
+            </div>
+            <div class="macro-sequence-stats">
+              <div class="macro-total-duration" id="macroEditorDuration" title="Configured time from the first event to the last event">
+                <span>Total duration</span>
+                <strong id="macroEditorTotalDuration" aria-live="polite">0 ms</strong>
+              </div>
+              <span class="macro-event-count" id="macroEditorEventCount">0 events</span>
+            </div>
+          </div>
+
+          <div class="macro-event-list" id="macroEditorEvents" data-event-container="root"></div>
+          <div class="macro-editor-empty hidden" id="macroEditorEmpty">
+            <span aria-hidden="true">＋</span>
+            <strong>No events yet</strong>
+            <small>Add an input, delay, or loop to begin.</small>
+          </div>
+
+          <div class="macro-add-toolbar" aria-label="Add event">
+            <span>Add event</span>
+            <button class="macro-clear-all" id="macroClearAllButton" type="button"><b>×</b> Clear all</button>
+            <button type="button" data-macro-add="input"><b>⌨</b> Input</button>
+            <button type="button" data-macro-add="delay"><b>◷</b> Delay</button>
+            <button type="button" data-macro-add="loop"><b>↻</b> Loop</button>
+            <button type="button" data-macro-add="note"><b>✎</b> Note</button>
+          </div>
+        </section>
       </div>
 
-      <label class="import-field">
-        <span>Macro name</span>
-        <input id="macroEditName" type="text" maxlength="60" autocomplete="off" required />
-      </label>
-
-      <label class="import-field">
-        <span>Description <small>Optional</small></span>
-        <input id="macroEditDescription" type="text" maxlength="80" autocomplete="off" />
-      </label>
-
-      <label class="import-field">
-        <span>FPS tag <small>Optional</small></span>
-        <select id="macroEditFpsTag">
-          <option value="">None</option>
-          <option value="60 FPS">60 FPS</option>
-          <option value="120 FPS">120 FPS</option>
-          <option value="240 FPS">240 FPS</option>
-        </select>
-      </label>
-
-      <label class="tag-toggle" for="macroEditTestingTag">
-        <input id="macroEditTestingTag" type="checkbox" />
-        <span>
-          <strong>TESTING</strong>
-          <small>Add the testing tag to this macro</small>
-        </span>
-      </label>
-
-      <div class="import-actions">
-        <button class="secondary-button" id="cancelMacroEditButton" type="button">Cancel</button>
-        <button class="primary-button" id="confirmMacroEditButton" type="submit">Save changes</button>
-      </div>
+      <footer class="macro-editor-footer">
+        <span class="hidden" id="macroEditorStatus"></span>
+        <div>
+          <button class="secondary-button" id="cancelMacroEditorButton" type="button">Cancel</button>
+          <button class="secondary-button macro-preview-button" id="previewMacroEditorButton" type="button" title="Use the unsaved changes when you press the configured Trigger">Test changes</button>
+          <button class="primary-button" id="saveMacroEditorButton" type="submit">Save macro</button>
+        </div>
+      </footer>
     </form>
   </div>
 
@@ -400,7 +506,7 @@
         Remove <strong class="preserve-ltr" id="macroDeleteName">Macro</strong>
         from <strong class="preserve-ltr" id="macroDeleteCharacter">Character</strong>?
       </p>
-      <p class="delete-warning">Its macro folder and registry entry will be permanently deleted. The final macro for a character cannot be deleted.</p>
+      <p class="delete-warning">Its macro folder and registry entry will be permanently deleted. If this is the final macro, the character card will remain available.</p>
       <div class="import-actions">
         <button class="secondary-button" id="cancelMacroDeleteButton" type="button">Cancel</button>
         <button class="danger-button" id="confirmMacroDeleteButton" type="button">Delete</button>
@@ -428,6 +534,6 @@
   </div>
 
   <div class="toast-container" id="toastContainer"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=1.7.6-ui-refresh-1"></script>
 </body>
 </html>

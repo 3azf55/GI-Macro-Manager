@@ -71,9 +71,16 @@ global CharacterToggleKey := ""
 global CharacterToggleHotkey := ""
 global ModeToggleKey := ""
 global ModeToggleHotkey := ""
+global InterfaceKey := ""
+global InterfaceHotkey := ""
+global RecorderHotkey := ""
 global ManagedHotkeyWindowSelector := ""
+global MacroTriggerByHotkey := {}
+global MacroTriggerBindings := []
+global ActiveMacroTriggerKey := ""
 
 global ConfigFile := A_ScriptDir . "\settings.ini"
+global AutoHotkeyV11DownloadUrl := "https://www.autohotkey.com/download/1.1/"
 global LState := false
 global RState := false
 global QState := false
@@ -91,7 +98,7 @@ global SkipInterruptKeyList := ""
 global AssetsDir := ""
 global IconDir := ""
 global SoundDir := ""
-global AppVersion := "v1.7.5"
+global AppVersion := "v1.7.6"
 global AutoLaunchExePath := ""
 global AutoLaunchEnabled := true
 global WebUIHwnd := 0
@@ -99,6 +106,7 @@ global WebUIPid := 0
 global WebUIExePath := ""
 global WebUIConnected := false
 global WebUILaunchTick := 0
+global WebUIBringToFrontPending := false
 
 global WebBridgeDir := ""
 global WebBridgeCommandDir := ""
@@ -115,13 +123,17 @@ global MacroById := {}
 global CharacterCatalog := {}
 global CharacterOrder := []
 global ActiveMacroPid := 0
+global MacroPreviewPath := ""
+global MacroPreviewExecuting := false
 
 OnExit, CleanupOnExit
 
+CheckAutoHotkeyV11OnFirstRun()
 ResolveProjectPaths()
 MacroCatalog_Initialize()
 LoadRuntimeSettings()
 LoadHotkeySettings()
+RefreshMacroSpecificHotkeys()
 if (AutoLaunchEnabled)
     RunAutoLaunchApp()
 SetupTrayMenu()
@@ -133,6 +145,103 @@ SetTimer, WebUIFileBridgeTick, 200, -20
 if (!LaunchWebUI())
     MsgBox, 48, Macro Manager, Unable to open the WebView2 interface.`nMacro Manager will remain available from the tray menu.
 return
+
+
+CheckAutoHotkeyV11OnFirstRun() {
+    global ConfigFile, AutoHotkeyV11DownloadUrl
+
+    IniRead, checkCompleted, %ConfigFile%, Prerequisites, AutoHotkeyV11CheckCompleted, 0
+    if (checkCompleted = 1 || checkCompleted = "true" || checkCompleted = "ON")
+        return
+
+    isAvailable := IsAutoHotkeyV11Installed()
+
+    ; This is intentionally a one-time prerequisite check. A successful check
+    ; is silent; a missing installation shows one actionable warning only.
+    IniWrite, 1, %ConfigFile%, Prerequisites, AutoHotkeyV11CheckCompleted
+    if (isAvailable)
+        return
+
+    message := "AutoHotkey v1.1 is required to run Macro Manager macros."
+        . "`n`nDownload: " . AutoHotkeyV11DownloadUrl
+        . "`n`nOpen the official download page now?"
+    MsgBox, 52, AutoHotkey v1.1 required, %message%
+    IfMsgBox, Yes
+        Run, %AutoHotkeyV11DownloadUrl%,, UseErrorLevel
+}
+
+
+IsAutoHotkeyV11Installed() {
+    ; When the source script is already running under v1.1, the required
+    ; interpreter is available even if it was installed in a custom folder.
+    if (!A_IsCompiled && RegExMatch(A_AhkVersion, "^1\.1(?:\.|$)"))
+        return true
+
+    originalRegistryView := (A_PtrSize = 8) ? 64 : 32
+    isRegistered := IsAutoHotkeyV11RegisteredInView(32)
+    if (A_Is64bitOS && !isRegistered)
+        isRegistered := IsAutoHotkeyV11RegisteredInView(64)
+    SetRegView, %originalRegistryView%
+
+    if (isRegistered)
+        return true
+
+    candidates := []
+    candidates.Push(A_ProgramFiles . "\AutoHotkey\AutoHotkey.exe")
+    EnvGet, programFiles64, ProgramW6432
+    EnvGet, programFiles32, ProgramFiles(x86)
+    if (programFiles64 != "")
+        candidates.Push(programFiles64 . "\AutoHotkey\AutoHotkey.exe")
+    if (programFiles32 != "")
+        candidates.Push(programFiles32 . "\AutoHotkey\AutoHotkey.exe")
+
+    for index, candidate in candidates {
+        if (IsAutoHotkeyV11Executable(candidate))
+            return true
+    }
+
+    return false
+}
+
+
+IsAutoHotkeyV11RegisteredInView(registryView) {
+    SetRegView, %registryView%
+
+    registryKeys := []
+    registryKeys.Push("HKEY_LOCAL_MACHINE\SOFTWARE\AutoHotkey")
+    registryKeys.Push("HKEY_CURRENT_USER\SOFTWARE\AutoHotkey")
+    registryKeys.Push("HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AutoHotkey")
+    registryKeys.Push("HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AutoHotkey")
+
+    for index, registryKey in registryKeys {
+        RegRead, registeredVersion, %registryKey%, Version
+        if (!ErrorLevel && RegExMatch(registeredVersion, "^1\.1(?:\.|$)"))
+            return true
+
+        RegRead, registeredVersion, %registryKey%, DisplayVersion
+        if (!ErrorLevel && RegExMatch(registeredVersion, "^1\.1(?:\.|$)"))
+            return true
+
+        RegRead, installDirectory, %registryKey%, InstallDir
+        if (ErrorLevel || installDirectory = "")
+            RegRead, installDirectory, %registryKey%, InstallLocation
+
+        if (!ErrorLevel && installDirectory != ""
+            && IsAutoHotkeyV11Executable(RTrim(installDirectory, "\/") . "\AutoHotkey.exe"))
+            return true
+    }
+
+    return false
+}
+
+
+IsAutoHotkeyV11Executable(executablePath) {
+    if (!FileExist(executablePath))
+        return false
+
+    FileGetVersion, executableVersion, %executablePath%
+    return !ErrorLevel && RegExMatch(executableVersion, "^1\.1(?:\.|$)")
+}
 
 ToggleCombo:
     SetMode(GetNextCombo(CurrentCharacter, CurrentMacro), true)
@@ -167,6 +276,43 @@ SelectDynamicCombo:
         SetMode(dynamicComboId)
 return
 
+MacroSpecificTrigger_Down:
+    if (MacroRunning || !IsManagedHotkeyScopeActive())
+        return
+
+    macroTriggerKey := MacroSpecificTrigger_KeyFromThisHotkey(A_ThisHotkey)
+    macroTriggerComboId := MacroSpecificTrigger_GetComboId(macroTriggerKey)
+    if (macroTriggerComboId = "")
+        return
+
+    StopRequested := false
+    MacroRunning := true
+    ActiveMacroTriggerKey := macroTriggerKey
+    WebUI_SendState()
+    PlayFeedbackSound("trigger")
+    StartTimerResolution()
+
+    try {
+        RunMacroProcessById(macroTriggerComboId, macroTriggerKey)
+    } finally {
+        StopActiveMacroProcess()
+        ReleaseAll()
+        StopTimerResolution()
+        MacroRunning := false
+        StopRequested := false
+        ActiveMacroTriggerKey := ""
+        WebUI_SendState()
+    }
+return
+
+MacroSpecificTrigger_Up:
+    macroTriggerKey := MacroSpecificTrigger_KeyFromThisHotkey(A_ThisHotkey)
+    if (ActiveMacroTriggerKey != "" && NormalizeHotkeyName(ActiveMacroTriggerKey) = NormalizeHotkeyName(macroTriggerKey)) {
+        StopRequested := true
+        StopActiveMacroProcess()
+    }
+return
+
 Trigger_Down:
     if (MacroRunning)
         return
@@ -181,7 +327,9 @@ Trigger_Down:
     StartTimerResolution()
 
     try {
-        if (AppMode = "SkipDialogs")
+        if (MacroPreviewPath != "")
+            RunMacroPreviewProcess(TriggerKey)
+        else if (AppMode = "SkipDialogs")
             Run_SkipDialogs()
         else
             RunSelectedMacroProcess()
@@ -196,7 +344,7 @@ Trigger_Down:
 return
 
 Trigger_Up:
-    if (AppMode = "SkipDialogs" && SkipStopMode = "AnyKey")
+    if (!MacroPreviewExecuting && AppMode = "SkipDialogs" && SkipStopMode = "AnyKey")
         return
     StopRequested := true
     StopActiveMacroProcess()
@@ -210,6 +358,11 @@ return
 ShowSettingsGui:
     if (!LaunchWebUI())
         MsgBox, 48, Macro Manager, Unable to open the WebView2 interface.
+return
+
+ShowInterface:
+    if (!LaunchWebUI(true))
+        TrayTip, Macro Manager, Unable to open the WebView2 interface., 5, 3
 return
 
 ResetAllHotkeys:
@@ -274,6 +427,7 @@ WebUI_FileBridgeTick() {
 WebUI_FileBridgeProcessCommands() {
     global WebBridgeCommandDir
     global WebUIHwnd, WebUIPid, WebUIConnected, WebUILaunchTick
+    global WebUIBringToFrontPending
 
     pattern := WebBridgeCommandDir . "\*.cmd"
 
@@ -311,6 +465,10 @@ WebUI_FileBridgeProcessCommands() {
 
             WebUIConnected := true
             WebUILaunchTick := 0
+            if (WebUIBringToFrontPending) {
+                WebUI_PromoteWindow(WebUIHwnd, true)
+                WebUIBringToFrontPending := false
+            }
             WebUI_FileBridgeWriteState()
             continue
         }
@@ -378,7 +536,7 @@ WebUI_FileBridgeWriteState(payload := "") {
     global WebBridgeStateFile, WebBridgeLastStateTick, WebBridgeInitialized
     global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
     global CurrentCharacter, CurrentMacro
-    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
     global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
 
     if (!WebBridgeInitialized || WebBridgeStateFile = "")
@@ -402,6 +560,8 @@ WebUI_FileBridgeWriteState(payload := "") {
             . "`ncomboToggleKey=" . ComboToggleKey
             . "`ncharacterToggleKey=" . CharacterToggleKey
             . "`nmodeToggleKey=" . ModeToggleKey
+            . "`ninterfaceKey=" . InterfaceKey
+            . "`nrecorderHotkey=" . RecorderHotkey
             . "`nautoLaunchPath=" . AutoLaunchExePath
             . "`nautoLaunchEnabled=" . (AutoLaunchEnabled ? 1 : 0)
             . "`nversion=" . AppVersion
@@ -448,13 +608,35 @@ WebUI_FindWindowByPid(processId) {
 }
 
 
-WebUI_ActivateExisting() {
+WebUI_PromoteWindow(hwnd, temporarilyTopMost := false) {
+    if (!hwnd || !DllCall("IsWindow", "Ptr", hwnd))
+        return false
+
+    WinShow, ahk_id %hwnd%
+    WinRestore, ahk_id %hwnd%
+    ; Clear a persistent topmost state left by an older engine build. F11 may
+    ; briefly raise the interface above a fullscreen/borderless game, but the
+    ; window must return to the normal z-order immediately afterwards.
+    WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
+    if (temporarilyTopMost)
+        WinSet, AlwaysOnTop, On, ahk_id %hwnd%
+    WinActivate, ahk_id %hwnd%
+    if (temporarilyTopMost) {
+        Sleep, 60
+        WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
+        WinActivate, ahk_id %hwnd%
+    }
+    return true
+}
+
+WebUI_ActivateExisting(bringToFront := false) {
     global WebUIHwnd, WebUIPid, WebUIConnected, WebUILaunchTick
+    global WebUIBringToFrontPending
 
     if (WebUIHwnd && DllCall("IsWindow", "Ptr", WebUIHwnd)) {
-        WinShow, ahk_id %WebUIHwnd%
-        WinRestore, ahk_id %WebUIHwnd%
-        WinActivate, ahk_id %WebUIHwnd%
+        WebUI_PromoteWindow(WebUIHwnd, bringToFront)
+        if (bringToFront)
+            WebUIBringToFrontPending := false
         WebUI_SendState()
         return true
     }
@@ -476,9 +658,9 @@ WebUI_ActivateExisting() {
     if (discoveredHwnd) {
         WebUIHwnd := discoveredHwnd
         WebUIConnected := true
-        WinShow, ahk_id %WebUIHwnd%
-        WinRestore, ahk_id %WebUIHwnd%
-        WinActivate, ahk_id %WebUIHwnd%
+        WebUI_PromoteWindow(WebUIHwnd, bringToFront)
+        if (bringToFront)
+            WebUIBringToFrontPending := false
         WebUI_SendState()
         return true
     }
@@ -496,14 +678,19 @@ WebUI_ActivateExisting() {
 }
 
 
-LaunchWebUI() {
+LaunchWebUI(bringToFront := false) {
     global WebUIHwnd, WebUIPid, WebUIExePath, WebUILaunchTick
+    global WebUIBringToFrontPending
 
-    if (WebUI_ActivateExisting())
+    if (bringToFront)
+        WebUIBringToFrontPending := true
+
+    if (WebUI_ActivateExisting(bringToFront))
         return true
 
     WebUIExePath := ResolveWebUIExePath()
     if (WebUIExePath = "") {
+        WebUIBringToFrontPending := false
         TrayTip, Macro Manager, WebView2 UI executable was not found. Build UIHost and place UMM.UI.exe beside this script., 5, 2
         return false
     }
@@ -518,6 +705,7 @@ LaunchWebUI() {
     if (ErrorLevel) {
         WebUIPid := 0
         WebUILaunchTick := 0
+        WebUIBringToFrontPending := false
         TrayTip, Macro Manager, Failed to start the WebView2 interface., 5, 3
         return false
     }
@@ -527,6 +715,10 @@ LaunchWebUI() {
 
 ResolveWebUIExePath() {
     candidates := []
+    ; build-and-stage.ps1 publishes the current UI into dist. Prefer that
+    ; output when this source-tree engine is launched so an older executable
+    ; beside the project files can never hide a successful rebuild.
+    candidates.Push(A_ScriptDir . "\dist\UMM.UI.exe")
     candidates.Push(A_ScriptDir . "\UMM.UI.exe")
     candidates.Push(A_ScriptDir . "\UMM.UI\UMM.UI.exe")
     candidates.Push(A_ScriptDir . "\UIHost\bin\Release\net8.0-windows\win-x64\publish\UMM.UI.exe")
@@ -606,13 +798,14 @@ WebUI_IsSafeProtocolValue(value, maximumLength) {
 }
 
 WebUI_IsAllowedAction(action) {
-    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|setHotkey|setHotkeyScope|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
+    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|refreshMacroCatalog|startMacroPreview|stopMacroPreview|setHotkey|setHotkeyScope|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
     return InStr(allowedActions, "|" . action . "|", true)
 }
 
 WebUI_HandleCommand(message) {
     global MacroRunning, SoundsEnabled, SkipStopMode
     global AutoLaunchExePath, AutoLaunchEnabled, ConfigFile
+    global CurrentCharacter, CurrentMacro, CharacterOrder
 
     action := message.HasKey("action") ? message.action : ""
     value := message.HasKey("value") ? message.value : ""
@@ -707,6 +900,45 @@ WebUI_HandleCommand(message) {
         characterName := message.HasKey("character") ? message.character : ""
         orderedComboIds := message.HasKey("comboIds") ? message.comboIds : ""
         MacroCatalog_Reorder(characterName, orderedComboIds)
+        return
+    }
+
+    if (action = "refreshMacroCatalog") {
+        if (MacroRunning) {
+            WebUI_SendError("Release the trigger before refreshing the macro library.")
+            return
+        }
+
+        preferredComboId := message.HasKey("preferredComboId") ? message.preferredComboId : ""
+        if (!MacroCatalog_Load()) {
+            WebUI_SendError("The macro was saved, but the macro library could not be reloaded.")
+            return
+        }
+
+        preferredCombo := MacroCatalog_GetCombo(preferredComboId)
+        if (IsObject(preferredCombo)) {
+            CurrentCharacter := preferredCombo.character
+            CurrentMacro := preferredCombo.id
+        } else if (!IsValidComboForCharacter(CurrentCharacter, CurrentMacro)) {
+            CurrentCharacter := CharacterOrder.Length() ? CharacterOrder[1] : ""
+            CurrentMacro := GetDefaultComboForCharacter(CurrentCharacter)
+        }
+
+        SaveRuntimeSettings()
+        SetupTrayMenu()
+        UpdateTrayText()
+        WebUI_SendState()
+        return
+    }
+
+    if (action = "startMacroPreview") {
+        previewId := message.HasKey("previewId") ? message.previewId : ""
+        MacroPreview_Start(previewId)
+        return
+    }
+
+    if (action = "stopMacroPreview") {
+        MacroPreview_Stop()
         return
     }
 
@@ -815,6 +1047,10 @@ WebUI_SetHotkey(target, newKey) {
         success := SetCharacterToggleHotkey(newKey, true)
     else if (target = "ModeToggle")
         success := SetModeToggleHotkey(newKey, true)
+    else if (target = "Interface")
+        success := SetInterfaceHotkey(newKey, true)
+    else if (target = "Recorder")
+        success := SetRecorderHotkey(newKey, true)
 
     if (!success) {
         WebUI_SendError("AutoHotkey could not register that key.")
@@ -842,7 +1078,7 @@ WebUI_SendState() {
     if (WebUIHwnd && DllCall("IsWindow", "Ptr", WebUIHwnd)) {
         global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
         global CurrentCharacter, CurrentMacro
-        global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+        global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
         global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
 
         payload := "type=state"
@@ -859,6 +1095,8 @@ WebUI_SendState() {
             . "`ncomboToggleKey=" . ComboToggleKey
             . "`ncharacterToggleKey=" . CharacterToggleKey
             . "`nmodeToggleKey=" . ModeToggleKey
+            . "`ninterfaceKey=" . InterfaceKey
+            . "`nrecorderHotkey=" . RecorderHotkey
             . "`nautoLaunchPath=" . AutoLaunchExePath
             . "`nautoLaunchEnabled=" . (AutoLaunchEnabled ? 1 : 0)
             . "`nversion=" . AppVersion
@@ -1145,24 +1383,29 @@ MacroCatalog_ReadExportMetadata(sourcePath) {
         StringLower, fieldName, fieldName
         fieldName := LTrim(fieldName, "@")
 
-        if (fieldName = "character")
+        ; The first managed header is authoritative. Older exported files may
+        ; contain a second, stale header in their embedded source; it must not
+        ; overwrite the current metadata that appears first in the file.
+        if (fieldName = "character" && !metadata.HasKey("character"))
             metadata["character"] := fieldValue
-        else if (fieldName = "macro" || fieldName = "name")
+        else if ((fieldName = "macro" || fieldName = "name") && !metadata.HasKey("name"))
             metadata["name"] := fieldValue
-        else if (fieldName = "tooltip" || fieldName = "description")
+        else if ((fieldName = "tooltip" || fieldName = "description") && !metadata.HasKey("tooltip"))
             metadata["tooltip"] := fieldValue
-        else if (fieldName = "tag" || fieldName = "tags")
+        else if ((fieldName = "tag" || fieldName = "tags") && !metadata.HasKey("tag"))
             metadata["tag"] := fieldValue
-        else if (fieldName = "execution mode")
+        else if (fieldName = "execution mode" && !metadata.HasKey("executionmode"))
             metadata["executionmode"] := fieldValue
-        else if (fieldName = "detected trigger")
+        else if (fieldName = "detected trigger" && !metadata.HasKey("detectedtrigger"))
             metadata["detectedtrigger"] := fieldValue
+        else if (fieldName = "macro trigger" && !metadata.HasKey("macrotrigger"))
+            metadata["macrotrigger"] := fieldValue
     }
 
     return metadata
 }
 
-MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageName, comboName, tooltipName, tagName) {
+MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageName, comboName, tooltipName, tagName, macroTrigger := "") {
     manifestText := "[Macro]`r`n"
         . "Id=" . comboId . "`r`n"
         . "Character=" . characterName . "`r`n"
@@ -1170,6 +1413,7 @@ MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageNam
         . "Name=" . comboName . "`r`n"
         . "Tooltip=" . tooltipName . "`r`n"
         . "Tag=" . tagName . "`r`n"
+        . "MacroTrigger=" . macroTrigger . "`r`n"
         . "Source=source.ahk`r`n"
         . "ManagedPackage=1`r`n"
         . "PackageFormat=2`r`n"
@@ -1216,6 +1460,7 @@ MacroCatalog_NormalizeLegacyImportedPackages() {
         IniRead, orderValue, %MacroRegistryFile%, %oldSection%, Order, 0
         IniRead, executionMode, %MacroRegistryFile%, %oldSection%, ExecutionMode,
         IniRead, detectedTrigger, %MacroRegistryFile%, %oldSection%, DetectedTrigger,
+        IniRead, macroTrigger, %MacroRegistryFile%, %oldSection%, MacroTrigger,
 
         oldId := Trim(oldId)
         characterName := Trim(characterName)
@@ -1290,6 +1535,7 @@ MacroCatalog_NormalizeLegacyImportedPackages() {
         IniWrite, %orderValue%, %MacroRegistryFile%, %newSection%, Order
         IniWrite, %executionMode%, %MacroRegistryFile%, %newSection%, ExecutionMode
         IniWrite, %detectedTrigger%, %MacroRegistryFile%, %newSection%, DetectedTrigger
+        IniWrite, %macroTrigger%, %MacroRegistryFile%, %newSection%, MacroTrigger
 
         if (ErrorLevel) {
             IniDelete, %MacroRegistryFile%, %newSection%
@@ -1300,7 +1546,7 @@ MacroCatalog_NormalizeLegacyImportedPackages() {
         }
 
         manifestPath := newPackageDir . "\manifest.ini"
-        if (!MacroCatalog_WritePackageManifest(manifestPath, newId, characterName, imageName, comboName, tooltipName, tagName)) {
+        if (!MacroCatalog_WritePackageManifest(manifestPath, newId, characterName, imageName, comboName, tooltipName, tagName, macroTrigger)) {
             IniDelete, %MacroRegistryFile%, %newSection%
             if (movedPackage)
                 FileMoveDir, %newPackageDir%, %oldPackageDir%, 0
@@ -1314,7 +1560,7 @@ MacroCatalog_NormalizeLegacyImportedPackages() {
             if (movedPackage)
                 FileMoveDir, %newPackageDir%, %oldPackageDir%, 0
             oldManifestPath := oldPackageDir . "\manifest.ini"
-            MacroCatalog_WritePackageManifest(oldManifestPath, oldId, characterName, imageName, comboName, tooltipName, tagName)
+            MacroCatalog_WritePackageManifest(oldManifestPath, oldId, characterName, imageName, comboName, tooltipName, tagName, macroTrigger)
             failedCount += 1
             continue
         }
@@ -1434,6 +1680,12 @@ MacroCatalog_RegisterOrphanImports() {
             if (!MacroCatalog_IsAllowedTag(tagName))
                 tagName := ""
 
+            macroTrigger := Trim(manifestMetadata["macrotrigger"])
+            if (macroTrigger = "")
+                macroTrigger := Trim(exportMetadata["macrotrigger"])
+            if (macroTrigger != "" && (!IsAllowedBasicHotkey(macroTrigger) || IsApplicationHotkeyKey(macroTrigger) || MacroSpecificTrigger_KeyInUse(macroTrigger)))
+                macroTrigger := ""
+
             imageName := Trim(manifestMetadata["image"])
             if (!MacroCatalog_IsSafeField(imageName, 80))
                 imageName := characterName . ".png"
@@ -1478,13 +1730,14 @@ MacroCatalog_RegisterOrphanImports() {
             IniWrite, %maximumOrder%, %MacroRegistryFile%, %section%, Order
             IniWrite, %executionMode%, %MacroRegistryFile%, %section%, ExecutionMode
             IniWrite, %detectedTrigger%, %MacroRegistryFile%, %section%, DetectedTrigger
+            IniWrite, %macroTrigger%, %MacroRegistryFile%, %section%, MacroTrigger
 
             if (ErrorLevel) {
                 IniDelete, %MacroRegistryFile%, %section%
                 continue
             }
 
-            if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageName, comboName, tooltipName, tagName)) {
+            if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, imageName, comboName, tooltipName, tagName, macroTrigger)) {
                 IniDelete, %MacroRegistryFile%, %section%
                 continue
             }
@@ -1576,9 +1829,11 @@ MacroCatalog_HasOutdatedGeneratedRunners() {
         if (ErrorLevel)
             continue
 
-        if InStr(runnerText, "Macro Manager generated runner v4")
+        if InStr(runnerText, "Macro Manager generated runner v5")
             continue
 
+        if InStr(runnerText, "Macro Manager generated runner v4")
+            return true
         if InStr(runnerText, "Macro Manager generated runner v1")
             return true
         if InStr(runnerText, "Macro Manager generated runner v2")
@@ -1640,6 +1895,23 @@ MacroCatalog_BuildStandaloneSource(sourcePath, visited := "") {
     }
 
     return output
+}
+
+MacroCatalog_StripManagedExportHeaders(sourceText) {
+    ; Import stores the selected file intact as source. Without removing an
+    ; earlier Macro Manager export header, every export would accumulate stale
+    ; Name/Description/Tag lines below the new header.
+    Loop, 20
+    {
+        if !RegExMatch(sourceText
+            , "is)^\x{FEFF}?[ \t\r\n]*;[ \t]*Macro Manager export[ \t]*\R(?:[ \t]*;[^\r\n]*\R|[ \t]*\R)*?[ \t]*;[ \t]*Exported:[^\r\n]*(?:\R|$)(?:[ \t]*\R)*"
+            , managedHeader)
+            break
+
+        sourceText := SubStr(sourceText, StrLen(managedHeader) + 1)
+    }
+
+    return sourceText
 }
 
 MacroCatalog_MigrateLegacyBuiltIns() {
@@ -1750,6 +2022,11 @@ MacroCatalog_Export(comboId) {
         WebUI_SendError("Unable to read the selected macro source.")
         return false
     }
+    standaloneSource := MacroCatalog_StripManagedExportHeaders(standaloneSource)
+    if (Trim(standaloneSource, " `t`r`n") = "") {
+        WebUI_SendError("The selected macro source is empty after removing old export metadata.")
+        return false
+    }
 
     defaultName := MacroCatalog_Slug(combo.character . " - " . combo.name) . ".ahk"
     defaultPath := A_Desktop . "\" . defaultName
@@ -1772,6 +2049,7 @@ MacroCatalog_Export(comboId) {
         . "; Tag: " . combo.tag . "`r`n"
         . "; Execution mode: " . combo.executionMode . "`r`n"
         . "; Detected trigger: " . combo.detectedTrigger . "`r`n"
+        . "; Macro trigger: " . combo.macroTrigger . "`r`n"
         . "; Exported: " . A_NowUTC . " UTC`r`n`r`n"
 
     tempPath := exportPath . ".tmp." . A_TickCount
@@ -1920,13 +2198,19 @@ MacroCatalog_WriteAtomicText(targetPath, text) {
         return false
     }
 
-    FileMove, %tempPath%, %targetPath%, 1
-    if (ErrorLevel) {
-        FileDelete, %tempPath%
-        return false
+    ; WebView2 metadata saves and security scanners can briefly hold the INI
+    ; file on Windows. Retry the same atomic replacement instead of reporting
+    ; a permanent reorder failure for a transient sharing violation.
+    Loop, 5
+    {
+        FileMove, %tempPath%, %targetPath%, 1
+        if (!ErrorLevel)
+            return true
+        Sleep, 40
     }
 
-    return true
+    FileDelete, %tempPath%
+    return false
 }
 
 MacroCatalog_RewriteImportedStateCalls(line, shimName) {
@@ -1983,14 +2267,24 @@ MacroCatalog_CreateImportedRunner(sourcePath, runnerPath, comboId, ByRef executi
         canonicalTrigger := MacroCatalog_CanonicalHotkey(hotkeyName)
         autoReturnIndex := MacroCatalog_FindAutoExecuteReturn(lines, hotkeyIndex)
 
-        output := "; Macro Manager generated runner v4`r`n"
+        output := "; Macro Manager generated runner v5`r`n"
             . "; Original trigger detected automatically: "
             . hotkeyName . "`r`n"
             . "#NoEnv`r`n"
             . "#NoTrayIcon`r`n"
             . "#SingleInstance Force`r`n"
             . "#Persistent`r`n"
+            . "#MaxThreadsPerHotkey 1`r`n"
+            . "#MaxThreadsBuffer Off`r`n"
+            . "SendMode Input`r`n"
             . "SetBatchLines, -1`r`n"
+            . "SetMouseDelay, -1`r`n"
+            . "SetKeyDelay, -1, -1`r`n"
+            . "SetWinDelay, -1`r`n"
+            . "SetControlDelay, -1`r`n"
+            . "SetDefaultMouseSpeed, 0`r`n"
+            . "ListLines, Off`r`n"
+            . "Process, Priority,, High`r`n"
             . "SetWorkingDir, %A_ScriptDir%`r`n"
             . triggerStateVar . " := " . Chr(34) . canonicalTrigger
             . Chr(34) . "`r`n`r`n"
@@ -2069,9 +2363,15 @@ MacroCatalog_CreateImportedRunner(sourcePath, runnerPath, comboId, ByRef executi
 
     if RegExMatch(sourceText, "im)^\s*RunMacro\s*\(") {
         executionMode := "RunMacro"
-        output := "; Macro Manager generated runner v4`r`n"
+        output := "; Macro Manager generated runner v5`r`n"
             . "#NoEnv`r`n#NoTrayIcon`r`n#SingleInstance Force`r`n"
+            . "#MaxThreadsPerHotkey 1`r`n#MaxThreadsBuffer Off`r`n"
+            . "SendMode Input`r`n"
             . "SetBatchLines, -1`r`n"
+            . "SetMouseDelay, -1`r`nSetKeyDelay, -1, -1`r`n"
+            . "SetWinDelay, -1`r`nSetControlDelay, -1`r`n"
+            . "SetDefaultMouseSpeed, 0`r`nListLines, Off`r`n"
+            . "Process, Priority,, High`r`n"
             . "SetWorkingDir, %A_ScriptDir%`r`n"
             . "#Include %A_ScriptDir%\source.ahk`r`n"
             . "if IsFunc(" . Chr(34) . "RunMacro" . Chr(34) . ")`r`n"
@@ -2083,9 +2383,15 @@ MacroCatalog_CreateImportedRunner(sourcePath, runnerPath, comboId, ByRef executi
     ; No explicit hotkey and no RunMacro(): execute the source's original
     ; auto-execute section as-is when Macro Manager's trigger starts it.
     executionMode := "AutoExecute"
-    output := "; Macro Manager generated runner v4`r`n"
+    output := "; Macro Manager generated runner v5`r`n"
         . "#NoEnv`r`n#NoTrayIcon`r`n#SingleInstance Force`r`n"
+        . "#MaxThreadsPerHotkey 1`r`n#MaxThreadsBuffer Off`r`n"
+        . "SendMode Input`r`n"
         . "SetBatchLines, -1`r`n"
+        . "SetMouseDelay, -1`r`nSetKeyDelay, -1, -1`r`n"
+        . "SetWinDelay, -1`r`nSetControlDelay, -1`r`n"
+        . "SetDefaultMouseSpeed, 0`r`nListLines, Off`r`n"
+        . "Process, Priority,, High`r`n"
         . "SetWorkingDir, %A_ScriptDir%`r`n"
         . "#Include %A_ScriptDir%\source.ahk`r`n"
     return MacroCatalog_WriteAtomicText(runnerPath, output)
@@ -2129,14 +2435,14 @@ MacroCatalog_UpgradeImportedRunners() {
         if (ErrorLevel)
             continue
 
-        ; Keep current runners unchanged. Rebuild generated v3 runners so
-        ; they receive original-trigger state compatibility.
-        if InStr(runnerText, "Macro Manager generated runner v4")
+        ; Keep current runners unchanged. Rebuild generated v4 runners so
+        ; they receive the maximum-speed performance header.
+        if InStr(runnerText, "Macro Manager generated runner v5")
             continue
 
-        ; Upgrade old include wrappers and v3 AutoTrigger runners.
+        ; Upgrade old include wrappers and generated AutoTrigger runners.
         ; Custom user-authored run.ahk files remain untouched.
-        isGeneratedWrapper := InStr(runnerText, "#Include %A_ScriptDir%\source.ahk") || InStr(runnerText, "Macro Manager generated runner v3")
+        isGeneratedWrapper := InStr(runnerText, "#Include %A_ScriptDir%\source.ahk") || InStr(runnerText, "Macro Manager generated runner v3") || InStr(runnerText, "Macro Manager generated runner v4")
         if (!isGeneratedWrapper)
             continue
 
@@ -2155,6 +2461,7 @@ MacroCatalog_UpgradeImportedRunners() {
 
 MacroCatalog_Load() {
     global MacroRegistryFile, MacroCatalog, MacroById, CharacterCatalog, CharacterOrder
+    global TriggerKey, RecorderHotkey
 
     MacroCatalog := []
     MacroById := {}
@@ -2168,6 +2475,22 @@ MacroCatalog_Load() {
     Loop, Parse, sections, `n, `r
     {
         section := Trim(A_LoopField)
+        if (SubStr(section, 1, 10) = "Character.") {
+            IniRead, characterName, %MacroRegistryFile%, %section%, Name,
+            IniRead, imageName, %MacroRegistryFile%, %section%, Image,
+            characterName := Trim(characterName)
+            imageName := Trim(imageName)
+            if (characterName = "" || !MacroCatalog_IsSafeField(characterName, 50))
+                continue
+            if (imageName = "" || !MacroCatalog_IsSafeField(imageName, 80))
+                imageName := characterName . ".png"
+            if (!CharacterCatalog.HasKey(characterName)) {
+                character := {name: characterName, image: imageName, combos: []}
+                CharacterCatalog[characterName] := character
+                CharacterOrder.Push(characterName)
+            }
+            continue
+        }
         if (SubStr(section, 1, 6) != "Combo.")
             continue
 
@@ -2182,11 +2505,15 @@ MacroCatalog_Load() {
         IniRead, orderValue, %MacroRegistryFile%, %section%, Order, 9999
         IniRead, executionMode, %MacroRegistryFile%, %section%, ExecutionMode,
         IniRead, detectedTrigger, %MacroRegistryFile%, %section%, DetectedTrigger,
+        IniRead, macroTrigger, %MacroRegistryFile%, %section%, MacroTrigger,
 
         comboId := Trim(comboId)
         characterName := Trim(characterName)
         comboName := Trim(comboName)
         scriptPath := Trim(scriptPath)
+        macroTrigger := Trim(macroTrigger)
+        if (macroTrigger != "" && !IsAllowedBasicHotkey(macroTrigger))
+            macroTrigger := ""
         if (comboId = "" || characterName = "" || comboName = "" || scriptPath = "")
             continue
         if (MacroById.HasKey(comboId))
@@ -2238,7 +2565,8 @@ MacroCatalog_Load() {
             , builtIn: (builtInValue = 1)
             , order: orderValue + 0
             , executionMode: executionMode
-            , detectedTrigger: detectedTrigger}
+            , detectedTrigger: detectedTrigger
+            , macroTrigger: macroTrigger}
 
         MacroCatalog.Push(combo)
         MacroById[comboId] := combo
@@ -2252,7 +2580,25 @@ MacroCatalog_Load() {
     }
 
     MacroCatalog_SortCombosByOrder()
-    return MacroCatalog.Length() > 0
+    if (TriggerKey != "" && RecorderHotkey != "")
+        RefreshMacroSpecificHotkeys()
+    return CharacterOrder.Length() > 0
+}
+
+MacroCatalog_PreserveCharacter(characterName, imageName) {
+    global MacroRegistryFile
+
+    characterName := Trim(characterName)
+    imageName := Trim(imageName)
+    if (!MacroCatalog_IsSafeField(characterName, 50))
+        return false
+    if (imageName = "" || !MacroCatalog_IsSafeField(imageName, 80))
+        imageName := characterName . ".png"
+
+    section := "Character." . MacroCatalog_Slug(characterName)
+    IniWrite, %characterName%, %MacroRegistryFile%, %section%, Name
+    IniWrite, %imageName%, %MacroRegistryFile%, %section%, Image
+    return !ErrorLevel
 }
 
 MacroCatalog_SortCombosByOrder() {
@@ -2359,12 +2705,15 @@ MacroCatalog_NormalizeTag(tagName) {
     return result
 }
 
-MacroCatalog_ComboNameExists(characterName, comboName, excludedComboId := "") {
+MacroCatalog_ComboIdentityExists(characterName, comboName, tooltipName, tagName, excludedComboId := "") {
     global CharacterCatalog
     if (!CharacterCatalog.HasKey(characterName))
         return false
     for index, combo in CharacterCatalog[characterName].combos {
-        if (combo.id != excludedComboId && combo.name = comboName)
+        if (combo.id != excludedComboId
+            && combo.name = comboName
+            && combo.tooltip = tooltipName
+            && combo.tag = tagName)
             return true
     }
     return false
@@ -2383,18 +2732,18 @@ MacroCatalog_InferNameFromFile(sourcePath) {
     return sourceName != "" ? sourceName : "Imported macro"
 }
 
-MacroCatalog_SelectUniqueName(characterName, preferredName) {
+MacroCatalog_SelectUniqueName(characterName, preferredName, tooltipName, tagName) {
     preferredName := MacroCatalog_SanitizeDisplayField(preferredName, 60)
     if (preferredName = "")
         preferredName := "Imported macro"
-    if (!MacroCatalog_ComboNameExists(characterName, preferredName))
+    if (!MacroCatalog_ComboIdentityExists(characterName, preferredName, tooltipName, tagName))
         return preferredName
 
     Loop, 999
     {
         suffix := " (" . (A_Index + 1) . ")"
         candidate := SubStr(preferredName, 1, 60 - StrLen(suffix)) . suffix
-        if (!MacroCatalog_ComboNameExists(characterName, candidate))
+        if (!MacroCatalog_ComboIdentityExists(characterName, candidate, tooltipName, tagName))
             return candidate
     }
 
@@ -2502,11 +2851,14 @@ MacroCatalog_Import(characterName) {
     comboName := MacroCatalog_SanitizeDisplayField(exportMetadata["name"], 60)
     if (comboName = "")
         comboName := MacroCatalog_InferNameFromFile(sourcePath)
-    comboName := MacroCatalog_SelectUniqueName(characterName, comboName)
     tooltipName := MacroCatalog_SanitizeDisplayField(exportMetadata["tooltip"], 80)
     tagName := MacroCatalog_NormalizeTag(exportMetadata["tag"])
     if (tagName = "__INVALID_TAG__")
         tagName := ""
+    macroTrigger := Trim(exportMetadata["macrotrigger"])
+    if (macroTrigger != "" && (!IsAllowedBasicHotkey(macroTrigger) || IsApplicationHotkeyKey(macroTrigger) || MacroSpecificTrigger_KeyInUse(macroTrigger)))
+        macroTrigger := ""
+    comboName := MacroCatalog_SelectUniqueName(characterName, comboName, tooltipName, tagName)
 
     if (!MacroCatalog_IsSafeField(comboName, 60)) {
         WebUI_SendError("Unable to infer a valid macro name from the selected file.")
@@ -2571,6 +2923,7 @@ MacroCatalog_Import(characterName) {
     IniWrite, %nextOrder%, %MacroRegistryFile%, %section%, Order
     IniWrite, %executionMode%, %MacroRegistryFile%, %section%, ExecutionMode
     IniWrite, %detectedTrigger%, %MacroRegistryFile%, %section%, DetectedTrigger
+    IniWrite, %macroTrigger%, %MacroRegistryFile%, %section%, MacroTrigger
 
     if (ErrorLevel) {
         IniDelete, %MacroRegistryFile%, %section%
@@ -2582,7 +2935,7 @@ MacroCatalog_Import(characterName) {
     ; Keep imported folders portable. A manifest makes the registration
     ; explicit and allows safe recovery in another project tree.
     manifestPath := absoluteDir . "\manifest.ini"
-    if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, characterName . ".png", comboName, tooltipName, tagName)) {
+    if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, characterName . ".png", comboName, tooltipName, tagName, macroTrigger)) {
         IniDelete, %MacroRegistryFile%, %section%
         FileRemoveDir, %absoluteDir%, 1
         WebUI_SendError("Unable to write the imported macro manifest.")
@@ -2643,8 +2996,8 @@ MacroCatalog_Edit(comboId, comboName, tooltipName, tagName) {
         WebUI_SendError("Invalid macro tags.")
         return false
     }
-    if (MacroCatalog_ComboNameExists(combo.character, comboName, combo.id)) {
-        WebUI_SendError("A macro with that name already exists for this character.")
+    if (MacroCatalog_ComboIdentityExists(combo.character, comboName, tooltipName, tagName, combo.id)) {
+        WebUI_SendError("A macro with the same name, description, and tags already exists for this character.")
         return false
     }
 
@@ -2667,12 +3020,12 @@ MacroCatalog_Edit(comboId, comboName, tooltipName, tagName) {
     absoluteScript := MacroCatalog_ResolvePath(combo.script)
     SplitPath, absoluteScript, , packageDir
     manifestPath := packageDir . "\manifest.ini"
-    if (!MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag)) {
+    if (!MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag, combo.macroTrigger)) {
         combo.name := oldName
         combo.tooltip := oldTooltip
         combo.tag := oldTag
         MacroCatalog_WriteComboSection(combo)
-        MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag)
+        MacroCatalog_WritePackageManifest(manifestPath, combo.id, combo.character, combo.image, combo.name, combo.tooltip, combo.tag, combo.macroTrigger)
         WebUI_SendError("Unable to update the macro manifest.")
         return false
     }
@@ -2743,29 +3096,15 @@ MacroCatalog_Reorder(characterName, orderedComboIds) {
     }
 
     orderBySection := {}
-    for orderIndex, comboId in orderedIds
-        orderBySection["Combo." . comboId] := orderIndex * 10
-
-    updatedRegistryText := ""
-    currentSection := ""
-    replacedCount := 0
-
-    Loop, Parse, originalRegistryText, `n, `r
-    {
-        registryLine := A_LoopField
-
-        if RegExMatch(registryLine, "^\[([^\]]+)\]$", sectionMatch)
-            currentSection := sectionMatch1
-
-        if (orderBySection.HasKey(currentSection) && RegExMatch(registryLine, "^Order=")) {
-            registryLine := "Order=" . orderBySection[currentSection]
-            replacedCount += 1
-        }
-
-        updatedRegistryText .= (A_Index = 1 ? "" : "`r`n") . registryLine
+    for orderIndex, comboId in orderedIds {
+        sectionKey := "Combo." . comboId
+        StringLower, sectionKey, sectionKey
+        orderBySection[sectionKey] := orderIndex * 10
     }
 
-    if (replacedCount != expectedCount || !MacroCatalog_WriteAtomicText(MacroRegistryFile, updatedRegistryText)) {
+    updatedRegistryText := ""
+    if (!MacroCatalog_RewriteOrders(originalRegistryText, orderBySection, updatedRegistryText)
+        || !MacroCatalog_WriteAtomicText(MacroRegistryFile, updatedRegistryText)) {
         WebUI_SendError("Unable to save the new macro order.")
         return false
     }
@@ -2789,6 +3128,60 @@ MacroCatalog_Reorder(characterName, orderedComboIds) {
     return true
 }
 
+MacroCatalog_RewriteOrders(originalRegistryText, orderBySection, ByRef updatedRegistryText) {
+    lines := []
+    currentSectionKey := ""
+    foundSections := {}
+    writtenOrders := {}
+
+    Loop, Parse, originalRegistryText, `n, `r
+    {
+        registryLine := A_LoopField
+
+        if RegExMatch(registryLine, "^\s*\[([^\]]+)\]\s*$", sectionMatch) {
+            if (currentSectionKey != "" && orderBySection.HasKey(currentSectionKey)
+                && !writtenOrders.HasKey(currentSectionKey)) {
+                lines.Push("Order=" . orderBySection[currentSectionKey])
+                writtenOrders[currentSectionKey] := true
+            }
+
+            currentSectionKey := Trim(sectionMatch1)
+            StringLower, currentSectionKey, currentSectionKey
+            if (orderBySection.HasKey(currentSectionKey))
+                foundSections[currentSectionKey] := true
+        }
+
+        if (currentSectionKey != "" && orderBySection.HasKey(currentSectionKey)
+            && RegExMatch(registryLine, "i)^\s*Order\s*=")) {
+            ; Normalize the first Order key and remove accidental duplicates.
+            if (!writtenOrders.HasKey(currentSectionKey)) {
+                lines.Push("Order=" . orderBySection[currentSectionKey])
+                writtenOrders[currentSectionKey] := true
+            }
+            continue
+        }
+
+        lines.Push(registryLine)
+    }
+
+    if (currentSectionKey != "" && orderBySection.HasKey(currentSectionKey)
+        && !writtenOrders.HasKey(currentSectionKey)) {
+        lines.Push("Order=" . orderBySection[currentSectionKey])
+        writtenOrders[currentSectionKey] := true
+    }
+
+    for sectionKey, orderValue in orderBySection {
+        if (!foundSections.HasKey(sectionKey) || !writtenOrders.HasKey(sectionKey))
+            return false
+    }
+
+    updatedRegistryText := ""
+    for lineIndex, registryLine in lines
+        updatedRegistryText .= (lineIndex = 1 ? "" : "`r`n") . registryLine
+
+    return true
+}
+
 MacroCatalog_WriteComboSection(combo) {
     global MacroRegistryFile
 
@@ -2807,6 +3200,7 @@ MacroCatalog_WriteComboSection(combo) {
     IniWrite, % combo.order, %MacroRegistryFile%, %section%, Order
     IniWrite, % combo.executionMode, %MacroRegistryFile%, %section%, ExecutionMode
     IniWrite, % combo.detectedTrigger, %MacroRegistryFile%, %section%, DetectedTrigger
+    IniWrite, % combo.macroTrigger, %MacroRegistryFile%, %section%, MacroTrigger
     return !ErrorLevel
 }
 
@@ -2835,12 +3229,17 @@ MacroCatalog_DeleteImported(comboId) {
         return false
     }
 
-    ; A character is derived from its registered macros. Deleting its final
-    ; macro would remove that character from the catalog and make it impossible
-    ; to add a replacement from the current UI.
-    if (!CharacterCatalog.HasKey(combo.character)
-        || CharacterCatalog[combo.character].combos.Length() <= 1) {
-        WebUI_SendError("Import another macro for this character before deleting its last macro.")
+    if (!CharacterCatalog.HasKey(combo.character)) {
+        WebUI_SendError("The selected character is no longer available.")
+        return false
+    }
+
+    ; Character sections are independent from macro sections. Preserve one
+    ; before deleting the final macro so the UI card remains available for a
+    ; later import or a new visual macro.
+    isFinalCharacterMacro := CharacterCatalog[combo.character].combos.Length() <= 1
+    if (isFinalCharacterMacro && !MacroCatalog_PreserveCharacter(combo.character, combo.image)) {
+        WebUI_SendError("Unable to preserve the character card. The macro was not deleted.")
         return false
     }
 
@@ -2980,6 +3379,8 @@ MacroCatalog_ToJson() {
             json .= "," . q . "label" . q . ":" . q . MacroCatalog_JsonEscape(combo.name) . q
             json .= "," . q . "tooltip" . q . ":" . q . MacroCatalog_JsonEscape(combo.tooltip) . q
             json .= "," . q . "builtIn" . q . ":" . (combo.builtIn ? "true" : "false")
+            if (combo.macroTrigger != "")
+                json .= "," . q . "macroTrigger" . q . ":" . q . MacroCatalog_JsonEscape(combo.macroTrigger) . q
             if InStr("," . combo.tag . ",", "TESTING")
                 json .= "," . q . "testing" . q . ":true"
             if RegExMatch(combo.tag, "i)(60|120|240) FPS", fpsMatch)
@@ -2992,10 +3393,100 @@ MacroCatalog_ToJson() {
     return json
 }
 
+IsApplicationHotkeyKey(keyName) {
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
+
+    normalized := NormalizeHotkeyName(keyName)
+    if (normalized = "")
+        return false
+    return normalized = NormalizeHotkeyName(TriggerKey)
+        || normalized = NormalizeHotkeyName(ComboToggleKey)
+        || normalized = NormalizeHotkeyName(CharacterToggleKey)
+        || normalized = NormalizeHotkeyName(ModeToggleKey)
+        || normalized = NormalizeHotkeyName(InterfaceKey)
+        || normalized = NormalizeHotkeyName(RecorderHotkey)
+}
+
+MacroSpecificTrigger_KeyInUse(keyName, excludedComboId := "") {
+    global MacroCatalog
+
+    normalized := NormalizeHotkeyName(keyName)
+    if (normalized = "")
+        return false
+    for index, combo in MacroCatalog {
+        if (combo.id != excludedComboId && NormalizeHotkeyName(combo.macroTrigger) = normalized)
+            return true
+    }
+    return false
+}
+
+DisableMacroSpecificHotkeys() {
+    global MacroTriggerBindings, MacroTriggerByHotkey
+
+    UseManagedHotkeyContext()
+    for index, binding in MacroTriggerBindings {
+        downHotkey := binding.down
+        upHotkey := binding.up
+        try Hotkey, %downHotkey%, Off
+        try Hotkey, %upHotkey%, Off
+    }
+    ClearManagedHotkeyContext()
+    MacroTriggerBindings := []
+    MacroTriggerByHotkey := {}
+}
+
+RefreshMacroSpecificHotkeys() {
+    global MacroCatalog, MacroTriggerBindings, MacroTriggerByHotkey
+
+    DisableMacroSpecificHotkeys()
+    used := {}
+    UseManagedHotkeyContext()
+    for index, combo in MacroCatalog {
+        keyName := Trim(combo.macroTrigger)
+        normalized := NormalizeHotkeyName(keyName)
+        if (keyName = "" || !IsAllowedBasicHotkey(keyName) || IsApplicationHotkeyKey(keyName) || used.HasKey(normalized))
+            continue
+
+        downHotkey := "$*" . keyName
+        upHotkey := "$*" . keyName . " Up"
+        try {
+            Hotkey, %downHotkey%, MacroSpecificTrigger_Down, On
+            Hotkey, %upHotkey%, MacroSpecificTrigger_Up, On
+        } catch e {
+            try Hotkey, %downHotkey%, Off
+            try Hotkey, %upHotkey%, Off
+            continue
+        }
+
+        used[normalized] := true
+        MacroTriggerByHotkey[normalized] := combo.id
+        MacroTriggerBindings.Push({down: downHotkey, up: upHotkey})
+    }
+    ClearManagedHotkeyContext()
+    return true
+}
+
+MacroSpecificTrigger_KeyFromThisHotkey(hotkeyName) {
+    keyName := RegExReplace(Trim(hotkeyName), "i)\s+Up$")
+    return RegExReplace(keyName, "^[~*$]+")
+}
+
+MacroSpecificTrigger_GetComboId(keyName) {
+    global MacroTriggerByHotkey
+    normalized := NormalizeHotkeyName(keyName)
+    return MacroTriggerByHotkey.HasKey(normalized) ? MacroTriggerByHotkey[normalized] : ""
+}
+
 RunSelectedMacroProcess() {
     global CurrentMacro, ActiveMacroPid, StopRequested, TriggerKey
 
-    combo := MacroCatalog_GetCombo(CurrentMacro)
+    return RunMacroProcessById(CurrentMacro, TriggerKey)
+}
+
+RunMacroProcessById(comboId, triggerKey) {
+    global ActiveMacroPid, StopRequested
+
+    combo := MacroCatalog_GetCombo(comboId)
     if (!IsObject(combo)) {
         WebUI_SendError("The selected macro is missing from the catalog.")
         return false
@@ -3010,7 +3501,7 @@ RunSelectedMacroProcess() {
     StopActiveMacroProcess()
     SplitPath, scriptPath, scriptName, scriptDir
     command := Chr(34) . A_AhkPath . Chr(34) . " " . Chr(34) . scriptPath . Chr(34)
-        . " " . Chr(34) . TriggerKey . Chr(34)
+        . " " . Chr(34) . triggerKey . Chr(34)
     Run, %command%, %scriptDir%, UseErrorLevel, childPid
     if (ErrorLevel || !childPid) {
         WebUI_SendError("Unable to start the selected macro process.")
@@ -3023,7 +3514,7 @@ RunSelectedMacroProcess() {
         if (ErrorLevel != childPid)
             break
 
-        if (StopRequested || !GetKeyState(TriggerKey, "P") || !IsConfiguredGameWindowActive()) {
+        if (StopRequested || !GetKeyState(triggerKey, "P") || !IsConfiguredGameWindowActive()) {
             Process, Close, %childPid%
             break
         }
@@ -3044,6 +3535,91 @@ StopActiveMacroProcess() {
     Process, Exist, %processId%
     if (ErrorLevel = processId)
         Process, Close, %processId%
+}
+
+MacroPreview_Start(previewId) {
+    global MacroPreviewPath, MacroRunning, TriggerKey
+
+    if (MacroRunning) {
+        WebUI_SendError("Release the macro trigger before testing changes.")
+        return false
+    }
+
+    if (!RegExMatch(previewId, "^[0-9a-f]{32}$")) {
+        WebUI_SendError("The temporary macro test identifier is invalid.")
+        return false
+    }
+
+    previewDir := A_ScriptDir . "\bridge\macro-previews"
+    previewPath := previewDir . "\" . previewId . ".ahk"
+    if (!FileExist(previewPath)) {
+        WebUI_SendError("The temporary macro test file is missing.")
+        return false
+    }
+
+    MacroPreview_Stop(false)
+    MacroPreviewPath := previewPath
+    WebUI_SendMessage("type=macroPreviewState`nrunning=1`nmessage=Test ready. Press " . TriggerKey . " to run the edited macro.")
+    return true
+}
+
+MacroPreview_Stop(notify := true) {
+    global MacroPreviewPath, MacroPreviewExecuting
+
+    if (MacroPreviewExecuting)
+        StopActiveMacroProcess()
+    MacroPreviewExecuting := false
+    if (MacroPreviewPath != "")
+        FileDelete, %MacroPreviewPath%
+    MacroPreviewPath := ""
+    ReleaseAll()
+    if (notify)
+        WebUI_SendMessage("type=macroPreviewState`nrunning=0")
+}
+
+RunMacroPreviewProcess(triggerKey) {
+    global MacroPreviewPath, MacroPreviewExecuting, ActiveMacroPid, StopRequested
+
+    previewPath := MacroPreviewPath
+    if (previewPath = "" || !FileExist(previewPath)) {
+        MacroPreview_Stop()
+        WebUI_SendError("The temporary macro test is no longer available.")
+        return false
+    }
+
+    SplitPath, previewPath, previewName, previewDir
+    if (!RegExMatch(previewName, "^[0-9a-f]{32}\.ahk$")) {
+        MacroPreview_Stop()
+        WebUI_SendError("The temporary macro test path is invalid.")
+        return false
+    }
+
+    StopActiveMacroProcess()
+    command := Chr(34) . A_AhkPath . Chr(34) . " " . Chr(34) . previewPath . Chr(34)
+        . " " . Chr(34) . triggerKey . Chr(34)
+    Run, %command%, %previewDir%, UseErrorLevel, childPid
+    if (ErrorLevel || !childPid) {
+        WebUI_SendError("Unable to start the temporary macro test.")
+        return false
+    }
+
+    ActiveMacroPid := childPid
+    MacroPreviewExecuting := true
+    Loop {
+        Process, Exist, %childPid%
+        if (ErrorLevel != childPid)
+            break
+
+        if (StopRequested || !GetKeyState(triggerKey, "P") || !IsConfiguredGameWindowActive()) {
+            Process, Close, %childPid%
+            break
+        }
+        Sleep, 10
+    }
+
+    ActiveMacroPid := 0
+    MacroPreviewExecuting := false
+    return true
 }
 
 
@@ -3197,19 +3773,25 @@ IsManagedHotkeyScopeActive() {
 }
 
 RefreshManagedHotkeyScope() {
-    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
     global ManagedHotkeyWindowSelector
 
-    if (TriggerKey = "" || ComboToggleKey = "" || CharacterToggleKey = "" || ModeToggleKey = "") {
+    if (TriggerKey = "" || ComboToggleKey = "" || CharacterToggleKey = "" || ModeToggleKey = "" || InterfaceKey = "" || RecorderHotkey = "") {
         ManagedHotkeyWindowSelector := GetManagedHotkeyWindowSelector()
         return true
     }
 
+    DisableMacroSpecificHotkeys()
     keys := {Trigger: TriggerKey
         , ComboToggle: ComboToggleKey
         , CharacterToggle: CharacterToggleKey
-        , ModeToggle: ModeToggleKey}
-    return ApplyHotkeyConfiguration(keys, false, true)
+        , ModeToggle: ModeToggleKey
+        , Interface: InterfaceKey
+        , Recorder: RecorderHotkey}
+    success := ApplyHotkeyConfiguration(keys, false, true)
+    if (success)
+        RefreshMacroSpecificHotkeys()
+    return success
 }
 
 
@@ -3484,8 +4066,10 @@ LoadHotkeySettings() {
     IniRead, savedComboToggle, %ConfigFile%, Settings, ComboToggleKey, F10
     IniRead, savedCharacterToggle, %ConfigFile%, Settings, CharacterToggleKey, F9
     IniRead, savedModeToggle, %ConfigFile%, Settings, ModeToggleKey, F8
+    IniRead, savedInterface, %ConfigFile%, Settings, InterfaceKey, F11
+    IniRead, savedRecorder, %ConfigFile%, Settings, RecorderHotkey, F7
 
-    resolved := ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle)
+    resolved := ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle, savedInterface, savedRecorder)
 
     if (!ApplyHotkeyConfiguration(resolved, true, false)) {
         defaults := GetDefaultHotkeyConfiguration()
@@ -3831,8 +4415,63 @@ SetModeToggleHotkey(newKey, save := true, validatePeers := true) {
     return true
 }
 
+SetInterfaceHotkey(newKey, save := true, validatePeers := true) {
+    global InterfaceKey, InterfaceHotkey, ConfigFile
+
+    newKey := Trim(newKey)
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "Interface"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
+        return false
+    }
+
+    oldHk := InterfaceHotkey
+    oldKey := InterfaceKey
+
+    ; The interface shortcut stays global even when gameplay shortcuts are
+    ; limited to the game window.
+    ClearManagedHotkeyContext()
+    if (oldHk != "")
+        Hotkey, %oldHk%, Off
+
+    newHk := "$*" . newKey
+    try {
+        Hotkey, %newHk%, ShowInterface, On
+    } catch e {
+        if (oldHk != "")
+            Hotkey, %oldHk%, ShowInterface, On
+        InterfaceKey := oldKey
+        InterfaceHotkey := oldHk
+        return false
+    }
+
+    InterfaceKey := newKey
+    InterfaceHotkey := newHk
+    if (save)
+        IniWrite, %InterfaceKey%, %ConfigFile%, Settings, InterfaceKey
+    return true
+}
+
+SetRecorderHotkey(newKey, save := true, validatePeers := true) {
+    global RecorderHotkey, ConfigFile
+
+    newKey := Trim(newKey)
+    if (validatePeers) {
+        if (!IsAllowedKeyForTarget(newKey, "Recorder"))
+            return false
+    } else if (!IsAllowedBasicHotkey(newKey)) {
+        return false
+    }
+
+    RecorderHotkey := newKey
+    if (save)
+        IniWrite, %RecorderHotkey%, %ConfigFile%, Settings, RecorderHotkey
+    return true
+}
+
 GetDefaultHotkeyConfiguration() {
-    return {Trigger: "XButton2", ComboToggle: "F10", CharacterToggle: "F9", ModeToggle: "F8"}
+    return {Trigger: "XButton2", ComboToggle: "F10", CharacterToggle: "F9", ModeToggle: "F8", Interface: "F11", Recorder: "F7"}
 }
 
 NormalizeHotkeyName(keyName) {
@@ -3858,9 +4497,9 @@ IsAllowedBasicHotkey(keyName) {
 }
 
 IsAllowedKeyForTarget(keyName, target) {
-    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
 
-    if (target != "Trigger" && target != "ComboToggle" && target != "CharacterToggle" && target != "ModeToggle")
+    if (target != "Trigger" && target != "ComboToggle" && target != "CharacterToggle" && target != "ModeToggle" && target != "Interface" && target != "Recorder")
         return false
 
     if (!IsAllowedBasicHotkey(keyName))
@@ -3871,6 +4510,8 @@ IsAllowedKeyForTarget(keyName, target) {
     lowerCombo := NormalizeHotkeyName(ComboToggleKey)
     lowerCharacter := NormalizeHotkeyName(CharacterToggleKey)
     lowerMode := NormalizeHotkeyName(ModeToggleKey)
+    lowerInterface := NormalizeHotkeyName(InterfaceKey)
+    lowerRecorder := NormalizeHotkeyName(RecorderHotkey)
 
     if (target != "Trigger" && lowerKey = lowerTrigger)
         return false
@@ -3879,6 +4520,13 @@ IsAllowedKeyForTarget(keyName, target) {
     if (target != "CharacterToggle" && lowerKey = lowerCharacter)
         return false
     if (target != "ModeToggle" && lowerKey = lowerMode)
+        return false
+    if (target != "Interface" && lowerKey = lowerInterface)
+        return false
+    if (target != "Recorder" && lowerKey = lowerRecorder)
+        return false
+
+    if (MacroSpecificTrigger_KeyInUse(lowerKey))
         return false
 
     return true
@@ -3889,11 +4537,11 @@ IsValidHotkeyConfiguration(keys) {
         return false
 
     used := {}
-    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle"]
+    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle", "Interface", "Recorder"]
 
     for index, target in order {
         keyName := keys[target]
-        if (!IsAllowedBasicHotkey(keyName))
+        if (!IsAllowedBasicHotkey(keyName) || MacroSpecificTrigger_KeyInUse(keyName))
             return false
 
         normalized := NormalizeHotkeyName(keyName)
@@ -3907,21 +4555,25 @@ IsValidHotkeyConfiguration(keys) {
 }
 
 FindAvailableFallbackHotkey(preferredKey, used) {
-    candidates := [preferredKey, "XButton2", "XButton1", "F10", "F9", "F8", "F7", "F6", "F5", "F4", "F3", "F2", "F1"]
+    candidates := [preferredKey, "XButton2", "XButton1"
+        , "F24", "F23", "F22", "F21", "F20", "F19", "F18", "F17", "F16", "F15", "F14", "F13"
+        , "F12", "F11", "F10", "F9", "F8", "F7", "F6", "F5", "F4", "F3", "F2", "F1"
+        , "Tab", "CapsLock", "Backspace", "Enter", "Insert", "Delete", "Home", "End", "PgUp", "PgDn"
+        , "Up", "Down", "Left", "Right", "Space", "B", "C", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "R", "T", "U", "V", "X", "Y", "Z"]
 
     for index, candidate in candidates {
         normalized := NormalizeHotkeyName(candidate)
-        if (IsAllowedBasicHotkey(candidate) && !used.HasKey(normalized))
+        if (IsAllowedBasicHotkey(candidate) && !used.HasKey(normalized) && !MacroSpecificTrigger_KeyInUse(candidate))
             return candidate
     }
 
     return ""
 }
 
-ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle) {
+ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle, savedModeToggle, savedInterface, savedRecorder) {
     defaults := GetDefaultHotkeyConfiguration()
-    keys := {Trigger: Trim(savedTrigger), ComboToggle: Trim(savedComboToggle), CharacterToggle: Trim(savedCharacterToggle), ModeToggle: Trim(savedModeToggle)}
-    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle"]
+    keys := {Trigger: Trim(savedTrigger), ComboToggle: Trim(savedComboToggle), CharacterToggle: Trim(savedCharacterToggle), ModeToggle: Trim(savedModeToggle), Interface: Trim(savedInterface), Recorder: Trim(savedRecorder)}
+    order := ["Trigger", "ComboToggle", "CharacterToggle", "ModeToggle", "Interface", "Recorder"]
     counts := {}
 
     ; Replace individually invalid values before duplicate analysis.
@@ -3948,7 +4600,7 @@ ResolveHotkeyConfiguration(savedTrigger, savedComboToggle, savedCharacterToggle,
         candidate := keys[target]
         normalized := NormalizeHotkeyName(candidate)
 
-        if (!IsAllowedBasicHotkey(candidate) || used.HasKey(normalized))
+        if (!IsAllowedBasicHotkey(candidate) || used.HasKey(normalized) || MacroSpecificTrigger_KeyInUse(candidate))
             candidate := FindAvailableFallbackHotkey(defaults[target], used)
 
         if (candidate = "")
@@ -3968,6 +4620,8 @@ SaveHotkeyConfiguration(keys) {
     IniWrite, % keys.ComboToggle, %ConfigFile%, Settings, ComboToggleKey
     IniWrite, % keys.CharacterToggle, %ConfigFile%, Settings, CharacterToggleKey
     IniWrite, % keys.ModeToggle, %ConfigFile%, Settings, ModeToggleKey
+    IniWrite, % keys.Interface, %ConfigFile%, Settings, InterfaceKey
+    IniWrite, % keys.Recorder, %ConfigFile%, Settings, RecorderHotkey
 }
 
 ClearManagedHotkeyState() {
@@ -3975,6 +4629,8 @@ ClearManagedHotkeyState() {
     global ComboToggleKey, ComboToggleHotkey
     global CharacterToggleKey, CharacterToggleHotkey
     global ModeToggleKey, ModeToggleHotkey
+    global InterfaceKey, InterfaceHotkey
+    global RecorderHotkey
 
     TriggerKey := ""
     TriggerDownHotkey := ""
@@ -3985,23 +4641,26 @@ ClearManagedHotkeyState() {
     CharacterToggleHotkey := ""
     ModeToggleKey := ""
     ModeToggleHotkey := ""
+    InterfaceKey := ""
+    InterfaceHotkey := ""
+    RecorderHotkey := ""
 }
 
 ApplyHotkeyConfiguration(keys, save := true, restoreOnFailure := true) {
-    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey
+    global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
     global ManagedHotkeyWindowSelector
 
     if (!IsValidHotkeyConfiguration(keys))
         return false
 
-    previous := {Trigger: TriggerKey, ComboToggle: ComboToggleKey, CharacterToggle: CharacterToggleKey, ModeToggle: ModeToggleKey}
+    previous := {Trigger: TriggerKey, ComboToggle: ComboToggleKey, CharacterToggle: CharacterToggleKey, ModeToggle: ModeToggleKey, Interface: InterfaceKey, Recorder: RecorderHotkey}
     previousSelector := ManagedHotkeyWindowSelector
 
     DisableAllManagedHotkeys()
     ClearManagedHotkeyState()
     ManagedHotkeyWindowSelector := GetManagedHotkeyWindowSelector()
 
-    success := SetTriggerHotkey(keys.Trigger, false, false) && SetComboToggleHotkey(keys.ComboToggle, false, false) && SetCharacterToggleHotkey(keys.CharacterToggle, false, false) && SetModeToggleHotkey(keys.ModeToggle, false, false)
+    success := SetTriggerHotkey(keys.Trigger, false, false) && SetComboToggleHotkey(keys.ComboToggle, false, false) && SetCharacterToggleHotkey(keys.CharacterToggle, false, false) && SetModeToggleHotkey(keys.ModeToggle, false, false) && SetInterfaceHotkey(keys.Interface, false, false) && SetRecorderHotkey(keys.Recorder, false, false)
 
     if (success) {
         if (save)
@@ -4018,6 +4677,8 @@ ApplyHotkeyConfiguration(keys, save := true, restoreOnFailure := true) {
         SetComboToggleHotkey(previous.ComboToggle, false, false)
         SetCharacterToggleHotkey(previous.CharacterToggle, false, false)
         SetModeToggleHotkey(previous.ModeToggle, false, false)
+        SetInterfaceHotkey(previous.Interface, false, false)
+        SetRecorderHotkey(previous.Recorder, false, false)
     } else {
         ManagedHotkeyWindowSelector := previousSelector
     }
@@ -4065,6 +4726,7 @@ SetHotkeyScope(scopeName) {
 DisableAllManagedHotkeys() {
     global TriggerDownHotkey, TriggerUpHotkey
     global ComboToggleHotkey, CharacterToggleHotkey, ModeToggleHotkey
+    global InterfaceHotkey
 
     UseManagedHotkeyContext()
 
@@ -4084,6 +4746,9 @@ DisableAllManagedHotkeys() {
         Hotkey, %ModeToggleHotkey%, Off
 
     ClearManagedHotkeyContext()
+
+    if (InterfaceHotkey != "")
+        Hotkey, %InterfaceHotkey%, Off
 }
 
 
@@ -4096,6 +4761,7 @@ ResetHotkeysToDefault() {
     }
 
     defaults := GetDefaultHotkeyConfiguration()
+    defaults := ResolveHotkeyConfiguration(defaults.Trigger, defaults.ComboToggle, defaults.CharacterToggle, defaults.ModeToggle, defaults.Interface, defaults.Recorder)
     if (!ApplyHotkeyConfiguration(defaults, true, true)) {
         ShowModeTooltip("Hotkeys could not be reset", 1500)
         return
@@ -4304,6 +4970,7 @@ ReleaseAll() {
     DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 2, "UPtr", 0)
+    SendInput, {LButton up}{RButton up}{MButton up}{Q up}{E up}{R up}{F up}{W up}{A up}{S up}{D up}{Shift up}{Space up}{1 up}{2 up}{3 up}{4 up}{5 up}
     Sleep, 5
     DllCall("mouse_event", "UInt", 0x0010, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
     DllCall("mouse_event", "UInt", 0x0004, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
@@ -4314,6 +4981,7 @@ ReleaseAll() {
     DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 2, "UPtr", 0)
+    SendInput, {LButton up}{RButton up}{MButton up}{Q up}{E up}{R up}{F up}{W up}{A up}{S up}{D up}{Shift up}{Space up}{1 up}{2 up}{3 up}{4 up}{5 up}
 
     LState := false
     RState := false
@@ -4378,6 +5046,7 @@ HideTooltip:
 return
 
 CleanupOnExit:
+    MacroPreview_Stop(false)
     StopActiveMacroProcess()
     WebUI_SendMessage("type=engineClosing")
     SaveRuntimeSettings()

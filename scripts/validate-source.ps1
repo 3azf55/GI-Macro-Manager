@@ -51,6 +51,8 @@ $stylesPath = Join-Path $Root 'UIHost\ui\styles.css'
 $indexPath = Join-Path $Root 'UIHost\ui\index.html'
 $mainFormPath = Join-Path $Root 'UIHost\MainForm.cs'
 $bridgeProtocolPath = Join-Path $Root 'UIHost\BridgeProtocol.cs'
+$macroEditorServicePath = Join-Path $Root 'UIHost\MacroEditorService.cs'
+$keyboardRecordingServicePath = Join-Path $Root 'UIHost\KeyboardRecordingService.cs'
 $appManifestPath = Join-Path $Root 'UIHost\app.manifest'
 $runtimePath = Join-Path $Root 'Macros\Runtime\MacroRuntime.ahk'
 $releaseWorkflowPath = Join-Path $Root '.github\workflows\release.yml'
@@ -63,7 +65,7 @@ $fpsLicensePath = Join-Path $Root 'FpsUnlocker\LICENSE-UPSTREAM.txt'
 $fpsBuildScriptPath = Join-Path $Root 'scripts\build-fps-unlocker.ps1'
 $noticesPath = Join-Path $Root 'THIRD_PARTY_NOTICES.md'
 
-foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $mainFormPath, $bridgeProtocolPath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath, $fpsServicePath, $fpsNativePath, $fpsProjectPath, $fpsLicensePath, $fpsBuildScriptPath, $noticesPath)) {
+foreach ($required in @($enginePath, $projectPath, $buildInfoPath, $registryPath, $appJsPath, $stylesPath, $indexPath, $mainFormPath, $bridgeProtocolPath, $macroEditorServicePath, $keyboardRecordingServicePath, $appManifestPath, $runtimePath, $releaseWorkflowPath, $licensePath, $creditsPath, $fpsServicePath, $fpsNativePath, $fpsProjectPath, $fpsLicensePath, $fpsBuildScriptPath, $noticesPath)) {
     Assert-True (Test-Path $required -PathType Leaf) "Required source file is missing: $required"
 }
 
@@ -209,6 +211,105 @@ Assert-True ($engineText.Contains('DllCall("GetCommandLine", "Str")') -and $engi
     'The Administrator relaunch must use a /restart command-line guard.'
 Assert-True ([regex]::Matches($engineText, '(?i)\*RunAs').Count -eq 2) `
     'The engine must define exactly the compiled and interpreted guarded elevation commands.'
+Assert-True ($engineText.Contains('CheckAutoHotkeyV11OnFirstRun()') -and `
+            $engineText.Contains('AutoHotkeyV11CheckCompleted') -and `
+            $engineText.Contains('https://www.autohotkey.com/download/1.1/') -and `
+            $engineText.Contains('if (isAvailable)')) `
+    'The engine must silently remember a successful first-run AutoHotkey v1.1 prerequisite check and provide the official download link when missing.'
+
+$runtimeText = [System.IO.File]::ReadAllText($runtimePath)
+$macroEditorServiceText = [System.IO.File]::ReadAllText($macroEditorServicePath)
+$appJsText = [System.IO.File]::ReadAllText($appJsPath)
+$indexText = [System.IO.File]::ReadAllText($indexPath)
+$generatedPerformanceSettings = @(
+    '#NoEnv',
+    '#NoTrayIcon',
+    '#SingleInstance Force',
+    '#MaxThreadsPerHotkey 1',
+    '#MaxThreadsBuffer Off',
+    'SendMode Input',
+    'SetBatchLines, -1',
+    'SetMouseDelay, -1',
+    'SetKeyDelay, -1, -1',
+    'SetWinDelay, -1',
+    'SetControlDelay, -1',
+    'SetDefaultMouseSpeed, 0',
+    'ListLines, Off',
+    'Process, Priority,, High'
+)
+foreach ($setting in $generatedPerformanceSettings) {
+    Assert-True ($runtimeText.Contains($setting)) "Macro runtime is missing generated performance setting: $setting"
+    Assert-True ($macroEditorServiceText.Contains('"' + $setting + '"')) `
+        "Visual macro generator is missing performance setting: $setting"
+}
+$generatedRunnerFiles = Get-ChildItem (Join-Path $Root 'Macros\User') -Recurse -File -Filter 'run.ahk'
+foreach ($runnerFile in $generatedRunnerFiles) {
+    $runnerText = [System.IO.File]::ReadAllText($runnerFile.FullName)
+    Assert-True (-not $runnerText.Contains('Macro Manager generated runner v4')) `
+        "Outdated generated runner remains: $($runnerFile.FullName)"
+    if (-not $runnerText.Contains('Macro Manager generated runner v5')) {
+        continue
+    }
+    foreach ($setting in $generatedPerformanceSettings) {
+        Assert-True ($runnerText.Contains($setting)) `
+            "Generated runner is missing performance setting '$setting': $($runnerFile.FullName)"
+    }
+}
+Assert-True ($engineText.Contains('Macro Manager generated runner v5')) `
+    'The macro importer must generate the current v5 runner format.'
+Assert-True ($engineText.Contains('refreshMacroCatalog')) `
+    'The engine must reload the catalog after a visual macro is saved.'
+Assert-True ($appJsText.Contains('saveMacroDefinition')) `
+    'The visual macro editor save action is missing from app.js.'
+Assert-True (([System.IO.File]::ReadAllText($indexPath)).Contains('id="macroEditorTotalDuration"') -and `
+            $appJsText.Contains('function calculateMacroDuration(')) `
+    'The visual macro editor must show its live total duration.'
+Assert-True ($macroEditorServiceText.Contains('CanEditEvents = false') -and `
+            $macroEditorServiceText.Contains('Macro Manager visual macro v1') -and `
+            $macroEditorServiceText.Contains('Never') -and `
+            $macroEditorServiceText.Contains('run the AHK event parser for imported or otherwise unknown code')) `
+    'Unknown AHK sources must be restricted to metadata-only editing before event parsing.'
+Assert-True ($appJsText.Contains('is-metadata-only') -and `
+            $appJsText.Contains('macroEditorDocument.canEditEvents') -and `
+            $appJsText.Contains('function macroEventCards(')) `
+    'The macro editor must hide event editing for unknown sources and group visual events compactly.'
+$keyboardRecordingServiceText = [System.IO.File]::ReadAllText($keyboardRecordingServicePath)
+Assert-True ($appJsText.Contains('function resolveMacroEventDrop(') -and `
+            $appJsText.Contains('drop.destination.list.splice') -and `
+            $appJsText.Contains('data-event-command="duplicate"')) `
+    'Visual events must support cross-container drag/drop and duplication.'
+Assert-True ($indexText.Contains('id="macroRecorderPanel"') -and `
+            $indexText.Contains('id="macroRecorderLastWindow"') -and `
+            $indexText.Contains('id="macroRecorderKeys"') -and `
+            $keyboardRecordingServiceText.Contains('WhKeyboardLl') -and `
+            $keyboardRecordingServiceText.Contains('WhMouseLl') -and `
+            $keyboardRecordingServiceText.Contains('RecordingOverlayForm')) `
+    'The visual editor must provide global timed input recording, filters, and a floating recording control.'
+Assert-True ($appJsText.Contains('target: "Recorder"') -and `
+            $engineText.Contains('Recorder: "F7"') -and `
+            $engineText.Contains('SetRecorderHotkey(newKey') -and `
+            -not $indexText.Contains('id="macroRecorderHotkey"')) `
+    'The recorder shortcut must live on Hotkeys and use the shared hotkey conflict policy.'
+Assert-True (-not $indexText.Contains('Records keys, mouse buttons, and exact delays.') -and `
+            $keyboardRecordingServiceText.Contains('public void Reveal(bool persistent)') -and `
+            $keyboardRecordingServiceText.Contains('CreateRoundRectRgn')) `
+    'The recorder card copy must stay compact and its rounded overlay must auto-hide when idle.'
+Assert-True ($indexText.Contains('id="macroClearAllButton"') -and `
+            $appJsText.Contains('function clearAllMacroEditorEvents()') -and `
+            -not $appJsText.Contains('window.confirm("Clear all events from this macro?")') -and `
+            $appJsText.Contains("collapsed ? 'Expand' : 'Collapse'")) `
+    'The visual editor must clear all events immediately and use Expand/Collapse for macro details.'
+Assert-True ($indexText.Contains('id="macroTriggerCaptureButton"') -and `
+            $indexText.Contains('Choose custom hotkey') -and `
+            -not $indexText.Contains('Runs this macro directly') -and `
+            $macroEditorServiceText.Contains('["MacroTrigger"] = metadata.MacroTrigger') -and `
+            $engineText.Contains('MacroSpecificTrigger_Down:') -and `
+            $engineText.Contains('RunMacroProcessById(macroTriggerComboId, macroTriggerKey)')) `
+    'A macro-specific trigger must be editable, persisted, conflict checked, and executed directly.'
+Assert-True ($engineText.Contains('MacroCatalog_PreserveCharacter(combo.character, combo.image)') -and `
+            $engineText.Contains('SubStr(section, 1, 10) = "Character."') -and `
+            -not $engineText.Contains('Import another macro for this character before deleting its last macro.')) `
+    'Deleting a final macro must preserve its character card.'
 
 $appManifestText = [System.IO.File]::ReadAllText($appManifestPath)
 Assert-True ([regex]::IsMatch($appManifestText, 'requestedExecutionLevel\s+level="asInvoker"\s+uiAccess="false"')) `
@@ -235,21 +336,88 @@ foreach ($source in $inlinedSources) {
 $bridgeProtocolText = [System.IO.File]::ReadAllText($bridgeProtocolPath)
 Assert-True (-not $bridgeProtocolText.Contains('EngineWindowLocator')) 'Unused EngineWindowLocator remains in BridgeProtocol.cs.'
 Assert-True (-not $bridgeProtocolText.Contains('public static bool Send(')) 'Unused WM_COPYDATA sender remains in BridgeProtocol.cs.'
-$appJsText = [System.IO.File]::ReadAllText($appJsPath)
 Assert-True (-not $appJsText.Contains('function fillSelect(')) 'Unused fillSelect() remains in app.js.'
 Assert-True ($engineText.Contains('MacroCatalog_Import(characterName)')) `
     'Macro import must derive display metadata after the user selects an AHK file.'
 Assert-True ($engineText.Contains('MacroCatalog_Edit(comboId, comboName, tooltipName, tagName)')) `
     'The engine must support editing existing macro metadata.'
+Assert-True ($engineText.Contains('MacroCatalog_StripManagedExportHeaders(standaloneSource)') -and `
+            $engineText.Contains('!metadata.HasKey("name")') -and `
+            $engineText.Contains('!metadata.HasKey("tooltip")') -and `
+            $engineText.Contains('!metadata.HasKey("tag")')) `
+    'Export must remove stale managed headers and import must keep the first metadata header authoritative.'
+Assert-True ($engineText.Contains('MacroCatalog_RewriteOrders(originalRegistryText, orderBySection, updatedRegistryText)') -and `
+            $engineText.Contains('RegExMatch(registryLine, "i)^\s*Order\s*=")') -and `
+            $engineText.Contains('lines.Push("Order=" . orderBySection[currentSectionKey])')) `
+    'Macro reordering must normalize existing Order keys and add missing keys before saving.'
+Assert-True ($engineText.Contains('MacroCatalog_ComboIdentityExists(characterName, comboName, tooltipName, tagName') -and `
+            $macroEditorServiceText.Contains('HasSameCatalogIdentity(item, metadata.Name, metadata.Description, tag)')) `
+    'Macro uniqueness must use name, description, and tags rather than name alone.'
 Assert-True (-not $engineText.Contains('MsgBox, 52, Import AutoHotkey macro')) `
     'Macro import must not display the removed confirmation prompt.'
 Assert-True (-not $appJsText.Contains('Select this macro')) `
     'Macro cards without a description must not display placeholder text.'
 Assert-True (-not $appJsText.Contains('button.dataset.tooltip')) `
     'Macro cards must not recreate the removed hover tooltip.'
+Assert-True ($engineText.Contains('candidates.Push(A_ScriptDir . "\dist\UMM.UI.exe")')) `
+    'The source-tree engine must prefer the freshly staged dist UI over a legacy root executable.'
 $indexText = [System.IO.File]::ReadAllText($indexPath)
-Assert-True ($indexText.Contains('<span>Import macro</span>')) `
-    'The character page must label the import action as Import macro.'
+$stylesText = [System.IO.File]::ReadAllText($stylesPath)
+$removedHotkeyFocusSentence = 'Hotkeys are active only while the selected game window ' + 'is focused'
+Assert-True (-not $indexText.Contains($removedHotkeyFocusSentence) -and `
+            -not $appJsText.Contains($removedHotkeyFocusSentence)) `
+    'The removed game-focus Hotkeys sentence must not return.'
+Assert-True ($indexText.Contains('id="createMacroButton"') -and `
+            $indexText.Contains('id="addMacroButton"')) `
+    'The character page must provide separate visual creation and AHK import actions.'
+$removedMacroEditorCopy = @(
+    'NEW VISUAL MACRO',
+    'Use the arrows or drag cards',
+    'Only the name, description, and tags will be saved',
+    'Edit catalog information without reading or changing',
+    'Build the action sequence without editing AHK',
+    'A new managed AHK file will be created for this character',
+    'Saving replaces the selected macro sequence',
+    'Saving replaces the selected visual macro sequence'
+)
+foreach ($removedCopy in $removedMacroEditorCopy) {
+    Assert-True (-not $indexText.Contains($removedCopy) -and -not $appJsText.Contains($removedCopy)) `
+        "Removed macro-editor copy returned: $removedCopy"
+}
+$toolbarStart = $indexText.IndexOf('class="macro-command-bar"', [StringComparison]::Ordinal)
+$groupMatches = [regex]::Matches($indexText, 'class="macro-command-group"')
+$importButtonIndex = $indexText.IndexOf('id="addMacroButton"', [StringComparison]::Ordinal)
+$exportButtonIndex = $indexText.IndexOf('id="exportMacroButton"', [StringComparison]::Ordinal)
+$createButtonIndex = $indexText.IndexOf('id="createMacroButton"', [StringComparison]::Ordinal)
+$editButtonIndex = $indexText.IndexOf('id="editMacroButton"', [StringComparison]::Ordinal)
+$deleteButtonIndex = $indexText.IndexOf('id="deleteMacroButton"', [StringComparison]::Ordinal)
+Assert-True ($toolbarStart -ge 0 -and `
+            $groupMatches.Count -eq 2 -and `
+            $importButtonIndex -gt $deleteButtonIndex -and `
+            $exportButtonIndex -gt $importButtonIndex) `
+    'Import and export must remain together and in that order.'
+Assert-True ($createButtonIndex -gt $toolbarStart -and `
+            $editButtonIndex -gt $createButtonIndex -and `
+            $deleteButtonIndex -gt $editButtonIndex) `
+    'Create, edit, and delete must remain together and in that order.'
+Assert-True ($indexText.Contains('M12 4v11') -and $indexText.Contains('M12 15V4')) `
+    'Import and export must keep visually distinct inward and outward arrow icons.'
+Assert-True (-not $indexText.Contains('<span>Create</span>') -and `
+            -not $indexText.Contains('<span>Edit</span>') -and `
+            -not $indexText.Contains('<span>Delete</span>') -and `
+            -not $indexText.Contains('<span>Import AHK</span>') -and `
+            -not $indexText.Contains('<span>Export</span>') -and `
+            $indexText.Contains('aria-label="Create macro" title="Create macro"') -and `
+            $indexText.Contains('aria-label="Import AHK macro" title="Import AHK macro"')) `
+    'The Characters toolbar must remain icon-only while retaining accessible labels and hover hints.'
+Assert-True ($stylesText.Contains('width: 36px;') -and `
+            $stylesText.Contains('min-width: 36px;') -and `
+            $stylesText.Contains('flex-wrap: nowrap;')) `
+    'The icon-only Characters toolbar must remain compact and on one row.'
+Assert-True ([regex]::Matches($indexText, 'class="macro-command-icon"').Count -eq 5 -and `
+            [regex]::Matches($indexText, 'stroke="currentColor"').Count -ge 5 -and `
+            $stylesText.Contains('visibility: visible !important;')) `
+    'All five macro action icons must be embedded SVG strokes with forced visibility.'
 Assert-True (-not $indexText.Contains('id="macroImportModal"')) `
     'The removed macro import metadata form must not return.'
 Assert-True ($indexText.Contains('class="sidebar-icon-toggle sound-feedback-toggle"') -and `
@@ -265,8 +433,6 @@ Assert-True ($indexText.Contains('class="hero-dashboard-content"') -and `
             $indexText.Contains('class="quick-card"') -and `
             $indexText.Contains('class="hero-setting-card skip-card"')) `
     'Quick Controls and Skip Dialog Behavior must remain embedded in the Character Combos card.'
-Assert-True (-not $indexText.Contains('data-window-action="maximize"')) `
-    'The fixed application window must not display a maximize control.'
 Assert-True (-not $indexText.Contains('macroStateButton') -and `
             -not $appJsText.Contains('setMacroEnabled') -and `
             -not $engineText.Contains('MacroEnabled') -and `
@@ -277,20 +443,58 @@ Assert-True ($indexText.Contains('data-hotkey-scope="Everywhere"') -and `
             $engineText.Contains('SetHotkeyScope(scopeName)') -and `
             $engineText.Contains('Settings, HotkeyScope, GameOnly')) `
     'Hotkeys must provide persisted Everywhere and Game only activation scopes.'
+Assert-True ($appJsText.IndexOf('target: "Interface"', [StringComparison]::Ordinal) -gt `
+            $appJsText.IndexOf('target: "ComboToggle"', [StringComparison]::Ordinal) -and `
+            $appJsText.IndexOf('target: "Recorder"', [StringComparison]::Ordinal) -gt `
+            $appJsText.IndexOf('target: "Interface"', [StringComparison]::Ordinal) -and `
+            $engineText.Contains('Interface: "F11"') -and `
+            $engineText.Contains('Hotkey, %newHk%, ShowInterface, On') -and `
+            $engineText.Contains('WebUI_PromoteWindow(WebUIHwnd, true)') -and `
+            $engineText.Contains('WinSet, AlwaysOnTop, Off, ahk_id %hwnd%')) `
+    'The Hotkeys page must keep the configurable F11 Interface shortcut and place Recorder after it.'
 Assert-True ($indexText.Contains('data-page-panel="fps"') -and `
             $indexText.Contains('id="fpsTargetSlider"') -and `
             $appJsText.Contains('post("setFpsTarget"') -and `
             $appJsText.Contains("post('setFpsUnlockEnabled'")) `
     'The FPS page must expose the limiter slider and enable commands.'
 $mainFormText = [System.IO.File]::ReadAllText($mainFormPath)
-Assert-True ($mainFormText.Contains('MaximizeBox = false;')) `
-    'The native application window must keep maximize disabled.'
-Assert-True ($mainFormText.Contains('MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);') -and `
-            $mainFormText.Contains('MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);')) `
-    'The native application window must keep one fixed size.'
-Assert-True (-not $mainFormText.Contains('windowMaximize') -and `
-            -not $mainFormText.Contains('HitTestResizeBorder')) `
-    'Window maximize and resize-border handling must remain removed.'
+Assert-True ($mainFormText.Contains('index.html?launch={uiLaunchToken}')) `
+    'WebView2 navigation must use a per-launch cache-busting URL.'
+Assert-True ($indexText.Contains('styles.css?v=1.7.6-ui-refresh-1') -and `
+            $indexText.Contains('app.js?v=1.7.6-ui-refresh-1')) `
+    'The UI stylesheet and script must use the current cache-busting token.'
+Assert-True ($appJsText.Contains('function captureMacroEventLayout()') -and `
+            $appJsText.Contains('function animateMacroEventLayout(') -and `
+            $stylesText.Contains('transform: translateY(-1px) scale(.98);') -and `
+            $stylesText.Contains('.hotkey-action .secondary-button:active:not(:disabled)')) `
+    'Combo and hotkey micro-press feedback plus timeline motion must remain enabled.'
+Assert-True ($appJsText.Contains('post("setTransientTopMost", { active: true })') -and `
+            $appJsText.Contains('post("setTransientTopMost", { active: false })') -and `
+            $mainFormText.Contains('case "setTransientTopMost":')) `
+    'The hotkey capture surface must remain above other applications only while it is open.'
+Assert-True ($appJsText.Contains('post("setMacroRecordingTheme", { theme: selectedTheme })') -and `
+            $keyboardRecordingServiceText.Contains('public void SetTheme(string theme)') -and `
+            $keyboardRecordingServiceText.Contains('Color.FromArgb(24, 105, 72)')) `
+    'The floating recorder must follow the selected theme and use a green recording state.'
+Assert-True ($stylesText.Contains('.fps-limiter-card { width: 100%; max-width: none;') -and `
+            $stylesText.Contains('.fps-slider-block {') -and `
+            -not $stylesText.Contains('width: min(100%, 720px)')) `
+    'The FPS panel must scale across the available maximized window width.'
+Assert-True ($mainFormText.Contains('MaximizeBox = true;') -and `
+            $mainFormText.Contains('case "windowToggleMaximize":') -and `
+            $indexText.Contains('data-window-action="maximize"')) `
+    'The native application window must expose maximize and restore controls.'
+Assert-True ($mainFormText.Contains('applicationDirectory.Equals(rootDirectory') -and `
+            $mainFormText.Contains('Updating that mixed layout as if it were a runtime package')) `
+    'Self-update installation must be limited to a complete packaged runtime root.'
+$updateServiceText = [System.IO.File]::ReadAllText((Join-Path $Root 'UIHost\UpdateService.cs'))
+Assert-True ($updateServiceText.Contains('Remove-DirectoryContentsWithRetry') -and `
+            $updateServiceText.Contains('$activationMode = "in-place"') -and `
+            $updateServiceText.Contains('directory swap was blocked')) `
+    'The updater must fall back to an in-place, rollback-protected activation when Windows locks the installation directory.'
+Assert-True ($mainFormText.Contains('MinimumSize = new Size(920, 600);') -and `
+            -not $mainFormText.Contains('MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);')) `
+    'The native application window must remain usable at its minimum size and allow maximization.'
 Assert-True ($engineText.Contains('WebUI_IsSafeProtocolValue(value, maximumLength)')) `
     'The AHK bridge must validate protocol values without the legacy control-character regex.'
 Assert-True (-not $engineText.Contains('InStr(payload, Chr(0))')) `
@@ -309,7 +513,13 @@ Assert-True ($appJsText.Contains('function navigateToPage(pageName)')) `
     'The UI must animate navigation through the section-navigation helper.'
 Assert-True ($appJsText.Contains('function maybeShowUpdatePrompt(message)')) `
     'The UI must present automatic update availability with update and reminder actions.'
-$stylesText = [System.IO.File]::ReadAllText($stylesPath)
+Assert-True ($indexText.Contains('draggable="false"') -and `
+            $stylesText.Contains('-webkit-user-drag: none;') -and `
+            $stylesText.Contains('pointer-events: none;')) `
+    'Character portraits must not expose native selection or dragging.'
+Assert-True ([regex]::IsMatch($stylesText, '(?s)\.combo-panel-footer\s*\{[^}]*overflow-x:\s*auto;') -and `
+            [regex]::IsMatch($stylesText, '(?s)\.macro-command-bar\s*\{[^}]*display:\s*inline-flex;[^}]*flex:\s*0\s+0\s+auto;')) `
+    'Character macro actions must remain compact and on one non-wrapping toolbar row.'
 Assert-True ($stylesText.Contains('@media (prefers-reduced-motion: reduce)')) `
     'Interface animations must provide a reduced-motion fallback.'
 Assert-True ($stylesText.Contains('aspect-ratio: 1 / 1')) `
@@ -353,6 +563,11 @@ Assert-True ($fpsServiceText.Contains($fpsGuid) -and $fpsNativeText.Contains($fp
 Assert-True ($fpsServiceText.Contains('Math.Clamp(target, 10, 420)') -and `
             $fpsNativeText.Contains('std::clamp(static_cast<std::int32_t>(ipc->Framerate), 10, 420)')) `
     'The managed and native FPS limits must both remain 10 through 420.'
+Assert-True ($fpsServiceText.Contains('_enabled = settings.Enabled') -and `
+            $fpsServiceText.Contains('new FpsSettings { Enabled = _enabled, Target = _target }') -and `
+            $fpsServiceText.Contains('public bool Enabled { get; set; }') -and `
+            $fpsServiceText.Contains('private bool _enabled;')) `
+    'The FPS limiter must default to disabled on first launch and persist later user changes.'
 Assert-True ($fpsProjectText.Contains('<PlatformToolset>v143</PlatformToolset>') -and `
             $fpsProjectText.Contains('<RuntimeLibrary>MultiThreaded</RuntimeLibrary>')) `
     'The native FPS component must remain an x64 static-runtime Visual Studio build.'

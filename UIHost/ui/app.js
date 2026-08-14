@@ -39,11 +39,11 @@ const translations = {
   quickControls: "QUICK CONTROLS",
   skipDialogBehavior: "SKIP DIALOG BEHAVIOR",
   characterLibrary: "CHARACTER LIBRARY",
-  charactersTitle: "Characters & combos",
+  charactersTitle: "Characters & Combos",
   activeCharacter: "ACTIVE CHARACTER",
   inputSettings: "INPUT SETTINGS",
   hotkeysTitle: "Hotkeys",
-  hotkeyInfo: "Hotkeys are active only while the selected game window is focused. Gameplay keys and duplicate assignments are rejected.",
+  hotkeyInfo: "Gameplay keys and duplicate assignments are rejected.",
   hotkeyScopeEyebrow: "ACTIVATION SCOPE",
   hotkeyScopeTitle: "Where hotkeys work",
   hotkeyScopeHelp: "Choose whether the configured hotkeys respond everywhere or only while the game window is focused.",
@@ -119,14 +119,54 @@ function applyStaticTranslations() {
 let characterCatalog = {};
 
 let catalogJsonCache = "";
-let macroEditTarget = null;
+let macroEditorDocument = null;
+let macroEditorSaving = false;
+let macroEditorPending = false;
+let macroEventDragId = "";
+let macroEventDragIds = [];
+let macroEventSelection = new Set();
+let macroEventSelectionAnchor = "";
+let collapsedMacroLoops = new Set();
+let macroPreviewRunning = false;
+let macroEventUndoStack = [];
+let macroEventRedoStack = [];
+let macroEventHistoryKey = "";
+let macroEventHistoryTime = 0;
+let macroEventAnimationFrame = 0;
 let macroDeleteTarget = null;
+let macroRecordingState = {
+  available: false,
+  recording: false,
+  sessionId: "",
+  elapsedMs: 0,
+  capacityTrimmed: false,
+  settings: {
+    lastWindowEnabled: true,
+    windowSeconds: 30,
+    toggleHotkey: "F7",
+    allowedKeys: []
+  },
+  transitions: []
+};
+let macroRecordingBaseline = null;
+let macroRecordingSettingsTimer = 0;
+
+const macroEditorKeys = [
+  ["LButton", "Left mouse"], ["RButton", "Right mouse"], ["MButton", "Middle mouse"],
+  ["WheelUp", "Wheel up"], ["WheelDown", "Wheel down"],
+  ["Q", "Q"], ["E", "E"], ["R", "R"], ["F", "F"],
+  ["W", "W"], ["A", "A"], ["S", "S"], ["D", "D"],
+  ["Shift", "Shift"], ["Space", "Space"],
+  ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["5", "5"]
+];
 
 const hotkeyCatalog = [
   { target: "Trigger", title: "Trigger", description: "Run the selected action", stateKey: "triggerKey" },
   { target: "ModeToggle", title: "Mode", description: "Switch application mode", stateKey: "modeToggleKey" },
   { target: "CharacterToggle", title: "Character", description: "Cycle through characters", stateKey: "characterToggleKey" },
-  { target: "ComboToggle", title: "Combo", description: "Cycle the current character combos", stateKey: "comboToggleKey" }
+  { target: "ComboToggle", title: "Combo", description: "Cycle the current character combos", stateKey: "comboToggleKey" },
+  { target: "Interface", title: "Interface", description: "Open Macro Manager above the game", stateKey: "interfaceKey" },
+  { target: "Recorder", title: "Recorder", description: "Start or stop recording while a macro editor is open", stateKey: "recorderHotkey" }
 ];
 
 let state = {
@@ -143,6 +183,8 @@ let state = {
   comboToggleKey: "—",
   characterToggleKey: "—",
   modeToggleKey: "—",
+  interfaceKey: "F11",
+  recorderHotkey: "F7",
   autoLaunchPath: "",
   autoLaunchEnabled: true,
   fpsEnabled: false,
@@ -284,6 +326,57 @@ function shouldShowError(message) {
 }
 
 function applyMessage(message) {
+  if (message.type === "macroEditorDocument") {
+    macroEditorPending = false;
+    openMacroEditorDocument(message.document);
+    renderCharacters();
+    return;
+  }
+
+  if (message.type === "macroEditorSaved") {
+    const refreshQueued = boolValue(message.refreshQueued);
+    macroEditorSaving = false;
+    closeMacroEditor(true);
+    showToast(message.message || (message.created ? "Macro created." : "Macro saved."));
+    if (!refreshQueued) {
+      showToast("The file was saved. Restart Macro Manager to refresh the library.", true);
+    }
+    requestState();
+    return;
+  }
+
+  if (message.type === "macroEditorError") {
+    macroEditorPending = false;
+    setMacroEditorSaving(false);
+    showToast(message.message || "The macro could not be saved.", true);
+    renderCharacters();
+    return;
+  }
+
+  if (message.type === "macroRecordingState") {
+    applyMacroRecordingSnapshot(message.snapshot);
+    return;
+  }
+
+  if (message.type === "macroPreviewState") {
+    macroPreviewRunning = boolValue(message.running);
+    renderMacroPreviewButton();
+    if (message.message) showToast(String(message.message), boolValue(message.error));
+    return;
+  }
+
+  if (message.type === "windowState") {
+    const maximized = boolValue(message.maximized);
+    document.documentElement.classList.toggle("window-maximized", maximized);
+    const button = $('[data-window-action="maximize"]');
+    if (button) {
+      button.setAttribute("aria-pressed", String(maximized));
+      button.setAttribute("aria-label", maximized ? "Restore interface" : "Maximize interface");
+      button.title = maximized ? "Restore interface" : "Maximize interface";
+    }
+    return;
+  }
+
   if (message.type === "state") {
     completeStateRequest();
 
@@ -573,12 +666,13 @@ function ensureCharacterCards() {
     button.className = "character-card";
     button.dataset.character = name;
     button.innerHTML = `
-      <img alt="${escapeHtml(name)}" src="${portraitUrl(name)}" />
+      <img alt="${escapeHtml(name)}" src="${portraitUrl(name)}" draggable="false" />
       <div class="character-card-copy">
         <strong class="preserve-ltr">${escapeHtml(name)}</strong>
       </div>`;
 
     const image = button.querySelector("img");
+    image.addEventListener("dragstart", event => event.preventDefault());
     image.addEventListener("error", () => {
       if (meta.fallbackImage && !image.dataset.fallbackTried) {
         image.dataset.fallbackTried = "1";
@@ -606,7 +700,8 @@ function comboPresentation(combo) {
 
   const badges = [];
   if (combo.fps) badges.push({ text: combo.fps, className: "fps-badge" });
-  if (testing) badges.push({ text: "TESTING", className: "testing-badge" });
+  if (testing) badges.push({ text: "Test", className: "testing-badge" });
+  if (combo.macroTrigger) badges.push({ text: `TRIGGER ${combo.macroTrigger}`, className: "trigger-badge" });
 
   return { label, badges };
 }
@@ -969,20 +1064,24 @@ function renderCharacters() {
   $("#comboPanelCurrent").textContent = state.comboDisplay || "No macro selected";
 
   const addMacroButton = $("#addMacroButton");
-  addMacroButton.disabled = state.macroRunning || !state.character;
+  addMacroButton.disabled = state.macroRunning || !state.character || macroEditorPending;
   addMacroButton.title = state.macroRunning
     ? "Release the trigger before importing a macro."
     : `Import an AHK macro for ${state.character}`;
 
+  const createMacroButton = $("#createMacroButton");
+  createMacroButton.disabled = state.macroRunning || !state.character || macroEditorPending;
+  createMacroButton.title = state.macroRunning
+    ? "Release the trigger before creating a macro."
+    : `Create a macro for ${state.character}`;
+
   const selectedCombo = getSelectedCombo();
   const hasSelectedCombo = Boolean(selectedCombo);
   const canManageSelected = hasSelectedCombo && !state.macroRunning;
-  const characterMacroCount = characterCatalog[state.character]?.combos?.length || 0;
-  const isLastCharacterMacro = characterMacroCount <= 1;
-  const canDelete = canManageSelected && !selectedCombo.builtIn && !isLastCharacterMacro;
+  const canDelete = canManageSelected && !selectedCombo.builtIn;
 
   const editMacroButton = $("#editMacroButton");
-  editMacroButton.disabled = !canManageSelected;
+  editMacroButton.disabled = !canManageSelected || macroEditorPending;
   editMacroButton.title = hasSelectedCombo
     ? `Edit ${selectedCombo.label}`
     : "Select a macro first.";
@@ -1006,16 +1105,12 @@ function renderCharacters() {
   deleteMacroButton.disabled = !canDelete;
   deleteMacroButton.title = canDelete
     ? `Delete ${selectedCombo.label}`
-    : isLastCharacterMacro
-      ? "Import another macro for this character before deleting its last macro."
-      : "Release the trigger before deleting this macro.";
+    : "Release the trigger before deleting this macro.";
   deleteMacroButton.setAttribute(
     "aria-label",
     canDelete
       ? `Delete ${selectedCombo.label}`
-      : isLastCharacterMacro
-        ? "The final macro for this character cannot be deleted"
-        : "Delete selected macro"
+      : "Delete selected macro"
   );
 
   $$(".combo-option").forEach(button => {
@@ -1282,6 +1377,7 @@ function normalizeTheme(value) {
 function applyTheme(theme, persist = true) {
   const selectedTheme = normalizeTheme(theme);
   document.documentElement.dataset.theme = selectedTheme;
+  post("setMacroRecordingTheme", { theme: selectedTheme });
 
   const isDark = selectedTheme === "dark";
   const icon = $("#themeIcon");
@@ -1344,6 +1440,7 @@ function openCommunityLink(name) {
 }
 
 function setImage(image, fallback, primaryUrl, fallbackText, secondUrl = null) {
+  image.draggable = false;
   fallback.textContent = fallbackText;
 
   if (!primaryUrl) {
@@ -1386,11 +1483,62 @@ function beginHotkeyCapture(item) {
   $("#hotkeyModalTitle").textContent = t("newKey", { name: item.title });
   $("#capturedKey").textContent = "…";
   $("#hotkeyModal").classList.remove("hidden");
+  post("setTransientTopMost", { active: true });
 }
 
 function endHotkeyCapture() {
   captureTarget = null;
   $("#hotkeyModal").classList.add("hidden");
+  post("setTransientTopMost", { active: false });
+}
+
+function renderMacroTrigger() {
+  const value = macroEditorDocument?.macroTrigger || "";
+  $("#macroTriggerValue").textContent = value || "Choose custom hotkey";
+  $("#macroTriggerClearButton").disabled = !value;
+}
+
+function beginMacroTriggerCapture() {
+  if (!macroEditorDocument?.canSave || macroRecordingState.recording) return;
+  beginHotkeyCapture({ target: "MacroTrigger", title: "Custom hotkey" });
+}
+
+function macroTriggerValidationMessage(key) {
+  const normalized = String(key || "").toLowerCase();
+  const reserved = new Set([
+    "lbutton", "rbutton", "q", "w", "e", "a", "s", "d", "f",
+    "shift", "lshift", "rshift", "wheelup", "wheeldown", "wheelleft", "wheelright"
+  ]);
+  if (reserved.has(normalized)) return "This gameplay key cannot be used as a macro trigger.";
+
+  const appHotkeys = [
+    state.triggerKey, state.comboToggleKey, state.characterToggleKey,
+    state.modeToggleKey, state.interfaceKey, state.recorderHotkey
+  ].map(value => String(value || "").toLowerCase());
+  if (appHotkeys.includes(normalized)) return "This key is already assigned on the Hotkeys page.";
+
+  const duplicate = Object.values(characterCatalog).some(character =>
+    (character?.combos || []).some(combo =>
+      combo.value !== macroEditorDocument?.comboId &&
+      String(combo.macroTrigger || "").toLowerCase() === normalized));
+  return duplicate ? "This key is already linked to another macro." : "";
+}
+
+function commitCapturedHotkey(mappedKey) {
+  if (!captureTarget) return;
+  $("#capturedKey").textContent = mappedKey;
+  if (captureTarget.target === "MacroTrigger") {
+    const error = macroTriggerValidationMessage(mappedKey);
+    if (error) {
+      showToast(error, true);
+      return;
+    }
+    macroEditorDocument.macroTrigger = mappedKey;
+    renderMacroTrigger();
+  } else {
+    post("setHotkey", { target: captureTarget.target, value: mappedKey });
+  }
+  endHotkeyCapture();
 }
 
 function mapKeyboardEvent(event) {
@@ -1430,73 +1578,1079 @@ function openMacroImport() {
   post("importMacro", { character: state.character });
 }
 
+function openMacroCreate() {
+  if (state.macroRunning) {
+    showToast("Release the trigger before creating a macro.", true);
+    return;
+  }
+  if (!state.character || !characterCatalog[state.character]) {
+    showToast("Select a character first.", true);
+    return;
+  }
+
+  macroEditorPending = true;
+  renderCharacters();
+  if (!post("createMacroDefinition", { character: state.character })) {
+    macroEditorPending = false;
+    renderCharacters();
+  }
+}
+
 function openMacroEdit(combo) {
-  if (!combo || state.macroRunning) return;
+  if (!combo || state.macroRunning || macroEditorPending) return;
 
-  macroEditTarget = {
-    comboId: combo.value,
-    character: state.character
+  macroEditorPending = true;
+  renderCharacters();
+  if (!post("loadMacroDefinition", { comboId: combo.value })) {
+    macroEditorPending = false;
+    renderCharacters();
+  }
+}
+
+function macroInteger(value, fallback = 0, maximum = Number.MAX_SAFE_INTEGER) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(0, Math.round(parsed)));
+}
+
+function normalizeMacroEditorEvent(item) {
+  const type = String(item?.type || "").toLowerCase();
+  return {
+    id: String(item?.id || newMacroEventId()),
+    type,
+    key: String(item?.key || ""),
+    action: String(item?.action || ""),
+    durationMs: macroInteger(item?.durationMs, 0, 600000),
+    count: macroInteger(item?.count, 0, 1000),
+    text: String(item?.text || ""),
+    rawId: String(item?.rawId || ""),
+    summary: String(item?.summary || ""),
+    timingUnknown: item?.timingUnknown !== false,
+    children: Array.isArray(item?.children)
+      ? item.children.map(normalizeMacroEditorEvent)
+      : []
   };
+}
 
-  $("#macroEditCharacter").textContent = state.character;
-  $("#macroEditName").value = combo.label || "";
-  $("#macroEditDescription").value = combo.tooltip || "";
-  $("#macroEditFpsTag").value = combo.fps || "";
-  $("#macroEditTestingTag").checked = Boolean(combo.testing);
-  $("#macroEditModal").classList.remove("hidden");
-  setTimeout(() => {
-    $("#macroEditName").focus();
-    $("#macroEditName").select();
+function openMacroEditorDocument(document) {
+  if (!document || typeof document !== "object") {
+    showToast("The macro editor received an invalid document.", true);
+    return;
+  }
+
+  macroEditorDocument = {
+    sessionId: String(document.sessionId || ""),
+    mode: document.mode === "create" ? "create" : "edit",
+    comboId: String(document.comboId || ""),
+    character: String(document.character || ""),
+    name: String(document.name || ""),
+    description: String(document.description || ""),
+    fpsTag: String(document.fpsTag || ""),
+    testing: Boolean(document.testing),
+    macroTrigger: String(document.macroTrigger || ""),
+    canSave: Boolean(document.canSave),
+    canEditEvents: Boolean(document.canEditEvents),
+    events: Array.isArray(document.events)
+      ? document.events.map(normalizeMacroEditorEvent)
+      : [],
+    warnings: Array.isArray(document.warnings)
+      ? document.warnings.map(String)
+      : []
+  };
+  macroEventSelection = new Set();
+  macroEventSelectionAnchor = "";
+  collapsedMacroLoops = new Set();
+  macroPreviewRunning = false;
+  resetMacroEventHistory();
+
+  const creating = macroEditorDocument.mode === "create";
+  const metadataOnly = !creating && !macroEditorDocument.canEditEvents;
+  const shell = $("#macroEditorForm");
+  shell.classList.remove("details-collapsed", "is-recording");
+  $("#toggleMacroDetailsButton").setAttribute("aria-pressed", "false");
+  $("#toggleMacroDetailsButton").textContent = "Collapse";
+  $("#toggleMacroDetailsButton").title = "Collapse macro details";
+  shell.classList.toggle("is-metadata-only", metadataOnly);
+  $("#macroEditorTitle").textContent = creating
+    ? "Create macro"
+    : metadataOnly ? "Edit macro details" : "Edit macro";
+  $("#macroEditorCharacter").textContent = macroEditorDocument.character || "—";
+  $("#macroEditorName").value = macroEditorDocument.name;
+  $("#macroEditorDescription").value = macroEditorDocument.description;
+  $("#macroEditorFpsTag").value = macroEditorDocument.fpsTag;
+  $("#macroEditorTestingTag").checked = macroEditorDocument.testing;
+  renderMacroTrigger();
+
+  const warning = $("#macroEditorWarning");
+  warning.textContent = macroEditorDocument.warnings.join(" ");
+  warning.classList.toggle("hidden", macroEditorDocument.warnings.length === 0);
+
+  $("#saveMacroEditorButton").disabled = !macroEditorDocument.canSave;
+  $("#saveMacroEditorButton").textContent = creating ? "Create macro" : "Save changes";
+  const status = $("#macroEditorStatus");
+  status.textContent = macroEditorDocument.canSave ? "" : "This macro cannot be saved.";
+  status.classList.toggle("hidden", macroEditorDocument.canSave);
+
+  renderMacroEditorEvents();
+  renderMacroRecorder();
+  $("#macroEditorModal").classList.remove("hidden");
+  post("getMacroRecordingState");
+  setMacroEditorSaving(false);
+  window.setTimeout(() => {
+    $("#macroEditorName").focus();
+    if (!creating) $("#macroEditorName").select();
   }, 0);
 }
 
-function closeMacroEdit() {
-  $("#macroEditModal").classList.add("hidden");
-  macroEditTarget = null;
+function closeMacroEditor(force = false) {
+  if (macroEditorSaving && !force) return;
+  if (captureTarget) endHotkeyCapture();
+  window.cancelAnimationFrame(macroEventAnimationFrame);
+  macroEventAnimationFrame = 0;
+  $("#macroEditorModal").classList.add("hidden");
+  $("#macroEditorForm").classList.remove("is-metadata-only");
+  macroEditorDocument = null;
+  macroEventDragId = "";
+  macroEventDragIds = [];
+  macroEventSelection = new Set();
+  macroEventSelectionAnchor = "";
+  collapsedMacroLoops = new Set();
+  macroPreviewRunning = false;
+  resetMacroEventHistory();
+  macroRecordingBaseline = null;
+  post("stopMacroPreview");
+  post("closeMacroEditorSession");
+  setMacroEditorSaving(false);
 }
 
-function submitMacroEdit(event) {
+function setMacroEditorSaving(saving) {
+  macroEditorSaving = Boolean(saving);
+  const shell = $("#macroEditorForm");
+  const saveButton = $("#saveMacroEditorButton");
+  shell?.classList.toggle("is-saving", macroEditorSaving);
+  if (saveButton) {
+    saveButton.disabled = macroEditorSaving || !macroEditorDocument?.canSave;
+    if (macroEditorSaving) saveButton.textContent = "Saving…";
+    else if (macroEditorDocument) {
+      saveButton.textContent = macroEditorDocument.mode === "create"
+        ? "Create macro"
+        : "Save changes";
+    }
+  }
+  renderMacroPreviewButton();
+}
+
+function cloneMacroEvents(events) {
+  return (events || []).map(item => ({
+    ...item,
+    children: cloneMacroEvents(item.children || [])
+  }));
+}
+
+function macroEventHistorySnapshot() {
+  return JSON.stringify(cleanMacroEditorEvents(macroEditorDocument?.events || []));
+}
+
+function resetMacroEventHistory() {
+  macroEventUndoStack = [];
+  macroEventRedoStack = [];
+  macroEventHistoryKey = "";
+  macroEventHistoryTime = 0;
+}
+
+function recordMacroEventHistory(key = "change") {
+  if (!macroEditorDocument?.canEditEvents) return;
+  invalidateMacroPreview();
+  const snapshot = macroEventHistorySnapshot();
+  const now = performance.now();
+  const coalesce = key.startsWith("field:") &&
+    key === macroEventHistoryKey && now - macroEventHistoryTime < 700;
+  if (!coalesce && macroEventUndoStack.at(-1) !== snapshot) {
+    macroEventUndoStack.push(snapshot);
+    if (macroEventUndoStack.length > 80) macroEventUndoStack.shift();
+  }
+  macroEventRedoStack = [];
+  macroEventHistoryKey = key;
+  macroEventHistoryTime = now;
+}
+
+function restoreMacroEventHistory(snapshot) {
+  try {
+    const parsed = JSON.parse(snapshot);
+    if (!Array.isArray(parsed)) return false;
+    macroEditorDocument.events = parsed.map(normalizeMacroEditorEvent);
+    macroEventSelection = new Set();
+    macroEventSelectionAnchor = "";
+    invalidateMacroPreview();
+    renderMacroEditorEvents();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function undoMacroEditorEvents() {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording || !macroEventUndoStack.length) return;
+  const current = macroEventHistorySnapshot();
+  const previous = macroEventUndoStack.pop();
+  if (!restoreMacroEventHistory(previous)) return;
+  macroEventRedoStack.push(current);
+  macroEventHistoryKey = "";
+  macroEventHistoryTime = 0;
+}
+
+function redoMacroEditorEvents() {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording || !macroEventRedoStack.length) return;
+  const current = macroEventHistorySnapshot();
+  const next = macroEventRedoStack.pop();
+  if (!restoreMacroEventHistory(next)) return;
+  macroEventUndoStack.push(current);
+  macroEventHistoryKey = "";
+  macroEventHistoryTime = 0;
+}
+
+function recordedTransitionsToMacroEvents(transitions) {
+  const events = [];
+  let previousOffset = 0;
+
+  (transitions || []).forEach((transition, index) => {
+    const offset = macroInteger(transition?.offsetMs, previousOffset, Number.MAX_SAFE_INTEGER);
+    let delay = Math.max(0, offset - previousOffset);
+    let delayPart = 0;
+    while (delay > 0) {
+      const durationMs = Math.min(600000, delay);
+      events.push({
+        id: `recorded_delay_${index}_${delayPart}_${newMacroEventId()}`,
+        type: "delay",
+        durationMs,
+        children: []
+      });
+      delay -= durationMs;
+      delayPart++;
+    }
+
+    const key = String(transition?.key || "");
+    const action = ["down", "up", "tap"].includes(transition?.action)
+      ? transition.action
+      : "tap";
+    events.push({
+      id: `recorded_input_${index}_${newMacroEventId()}`,
+      type: "input",
+      key,
+      action,
+      durationMs: 0,
+      children: []
+    });
+    previousOffset = offset;
+  });
+
+  return events;
+}
+
+function applyMacroRecordingSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return;
+
+  const wasRecording = macroRecordingState.recording;
+  const nextSettings = snapshot.settings && typeof snapshot.settings === "object"
+    ? snapshot.settings
+    : macroRecordingState.settings;
+  macroRecordingState = {
+    available: Boolean(snapshot.available),
+    recording: Boolean(snapshot.recording),
+    sessionId: String(snapshot.sessionId || ""),
+    elapsedMs: macroInteger(snapshot.elapsedMs, 0, Number.MAX_SAFE_INTEGER),
+    capacityTrimmed: Boolean(snapshot.capacityTrimmed),
+    settings: {
+      lastWindowEnabled: nextSettings.lastWindowEnabled !== false,
+      windowSeconds: Math.max(1, macroInteger(nextSettings.windowSeconds, 30, 600)),
+      toggleHotkey: String(nextSettings.toggleHotkey || state.recorderHotkey || "F7"),
+      allowedKeys: Array.isArray(nextSettings.allowedKeys)
+        ? nextSettings.allowedKeys.map(String)
+        : []
+    },
+    transitions: Array.isArray(snapshot.transitions) ? snapshot.transitions : []
+  };
+
+  if (macroEditorDocument?.canEditEvents) {
+    if (macroRecordingState.recording && !wasRecording) {
+      recordMacroEventHistory("recording");
+      macroRecordingBaseline = cloneMacroEvents(macroEditorDocument.events);
+    }
+
+    if (macroRecordingBaseline && (macroRecordingState.recording || wasRecording)) {
+      macroEditorDocument.events = [
+        ...cloneMacroEvents(macroRecordingBaseline),
+        ...recordedTransitionsToMacroEvents(macroRecordingState.transitions)
+      ];
+      renderMacroEditorEvents();
+    }
+
+    if (!macroRecordingState.recording && wasRecording) {
+      macroRecordingBaseline = null;
+    }
+  }
+
+  renderMacroRecorder();
+}
+
+function renderMacroRecorderKeys() {
+  const container = $("#macroRecorderKeys");
+  if (!container || container.dataset.initialized) return;
+  container.dataset.initialized = "1";
+  container.innerHTML = macroEditorKeys.map(([value, label]) => `
+    <label class="macro-recorder-key-chip">
+      <input type="checkbox" value="${escapeHtml(value)}" />
+      <span>${escapeHtml(label)}</span>
+    </label>`).join("");
+}
+
+function renderMacroRecorder() {
+  const panel = $("#macroRecorderPanel");
+  if (!panel) return;
+  renderMacroRecorderKeys();
+
+  const settings = macroRecordingState.settings;
+  panel.classList.toggle("is-recording", macroRecordingState.recording);
+  $("#macroEditorForm")?.classList.toggle("is-recording", macroRecordingState.recording);
+  const toggle = $("#macroRecorderToggleButton");
+  toggle.textContent = macroRecordingState.recording ? "Stop recording" : "Start recording";
+  toggle.disabled = !macroEditorDocument?.canEditEvents || !macroRecordingState.available;
+
+  const seconds = Math.max(0, Math.round(macroRecordingState.elapsedMs / 1000));
+  const count = macroRecordingState.transitions.length;
+  $("#macroRecorderStatus").textContent = macroRecordingState.recording
+    ? `Recording · ${seconds}s · ${count} captured`
+    : count ? `Stopped · ${count} captured` : `Ready · ${settings.toggleHotkey}`;
+  $("#macroRecorderLastWindow").checked = settings.lastWindowEnabled;
+  $("#macroRecorderLastWindow").disabled = macroRecordingState.recording;
+  $("#macroRecorderWindowSeconds").value = settings.windowSeconds;
+  $("#macroRecorderWindowSeconds").disabled = !settings.lastWindowEnabled || macroRecordingState.recording;
+  const allowed = new Set(settings.allowedKeys);
+  $$("#macroRecorderKeys input[type='checkbox']").forEach(input => {
+    input.checked = allowed.has(input.value);
+    input.disabled = macroRecordingState.recording;
+  });
+  $$(".macro-recorder-key-actions button").forEach(button => {
+    button.disabled = macroRecordingState.recording;
+  });
+
+  const warning = $("#macroEditorWarning");
+  if (macroRecordingState.capacityTrimmed && warning) {
+    const recorderWarning = "The recording reached its safety limit; the oldest captured inputs were removed.";
+    if (!warning.textContent.includes(recorderWarning)) {
+      warning.textContent = `${warning.textContent} ${recorderWarning}`.trim();
+    }
+    warning.classList.remove("hidden");
+  }
+  renderMacroPreviewButton();
+}
+
+function collectMacroRecordingSettings() {
+  return {
+    lastWindowEnabled: $("#macroRecorderLastWindow").checked,
+    windowSeconds: Math.max(1, macroInteger($("#macroRecorderWindowSeconds").value, 30, 600)),
+    toggleHotkey: macroRecordingState.settings.toggleHotkey,
+    allowedKeys: $$("#macroRecorderKeys input:checked").map(input => input.value)
+  };
+}
+
+function queueMacroRecordingSettings() {
+  window.clearTimeout(macroRecordingSettingsTimer);
+  macroRecordingSettingsTimer = window.setTimeout(() => {
+    post("setMacroRecordingSettings", collectMacroRecordingSettings());
+  }, 120);
+}
+
+function newMacroEventId() {
+  const suffix = globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 12)
+    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  return `event_${suffix}`;
+}
+
+function createMacroEvent(type) {
+  if (type === "delay") {
+    return { id: newMacroEventId(), type, durationMs: 100, children: [] };
+  }
+  if (type === "loop") {
+    return {
+      id: newMacroEventId(),
+      type,
+      count: 2,
+      children: [{
+        id: newMacroEventId(),
+        type: "input",
+        key: "LButton",
+        action: "tap",
+        durationMs: 30,
+        children: []
+      }]
+    };
+  }
+  if (type === "note") {
+    return { id: newMacroEventId(), type, text: "New note", children: [] };
+  }
+  return {
+    id: newMacroEventId(),
+    type: "input",
+    key: "LButton",
+    action: "tap",
+    durationMs: 30,
+    children: []
+  };
+}
+
+function findMacroEvent(eventId, events = macroEditorDocument?.events || [], depth = 0, parentLoop = null) {
+  for (let index = 0; index < events.length; index++) {
+    const item = events[index];
+    if (item.id === eventId) return { item, list: events, index, depth, parentLoop };
+    if (item.type === "loop") {
+      const nested = findMacroEvent(eventId, item.children, depth + 1, item);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function flattenMacroEvents(events = macroEditorDocument?.events || [], result = []) {
+  for (const item of events) {
+    result.push(item);
+    if (item.type === "loop") flattenMacroEvents(item.children || [], result);
+  }
+  return result;
+}
+
+function pruneMacroEventSelection() {
+  const validIds = new Set(flattenMacroEvents().map(item => item.id));
+  macroEventSelection = new Set([...macroEventSelection].filter(id => validIds.has(id)));
+  if (!validIds.has(macroEventSelectionAnchor)) macroEventSelectionAnchor = "";
+  collapsedMacroLoops = new Set([...collapsedMacroLoops].filter(id => validIds.has(id)));
+}
+
+function syncMacroEventSelectionClasses() {
+  $$("#macroEditorEvents .macro-event-card[data-event-id]").forEach(card => {
+    const selected = macroEventSelection.has(card.dataset.eventId);
+    card.classList.toggle("is-selected", selected);
+    card.setAttribute("aria-selected", String(selected));
+  });
+}
+
+function selectMacroEvent(eventId, { additive = false, range = false } = {}) {
+  if (!findMacroEvent(eventId)) return;
+  const flattened = flattenMacroEvents();
+  if (range && macroEventSelectionAnchor) {
+    const anchorIndex = flattened.findIndex(item => item.id === macroEventSelectionAnchor);
+    const targetIndex = flattened.findIndex(item => item.id === eventId);
+    if (anchorIndex >= 0 && targetIndex >= 0) {
+      if (!additive) macroEventSelection.clear();
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      flattened.slice(start, end + 1).forEach(item => macroEventSelection.add(item.id));
+    }
+  } else if (additive) {
+    if (macroEventSelection.has(eventId)) macroEventSelection.delete(eventId);
+    else macroEventSelection.add(eventId);
+    macroEventSelectionAnchor = eventId;
+  } else {
+    macroEventSelection = new Set([eventId]);
+    macroEventSelectionAnchor = eventId;
+  }
+  syncMacroEventSelectionClasses();
+}
+
+function countMacroEvents(events = macroEditorDocument?.events || []) {
+  return events.reduce(
+    (total, item) => total + 1 + (item.type === "loop" ? countMacroEvents(item.children) : 0),
+    0
+  );
+}
+
+function calculateMacroDuration(events = macroEditorDocument?.events || []) {
+  let milliseconds = 0n;
+  let indefinite = false;
+  let unknown = false;
+
+  for (const item of events) {
+    if (item.type === "delay" || (item.type === "input" && item.action === "tap" &&
+        item.key !== "WheelUp" && item.key !== "WheelDown")) {
+      const maximum = item.type === "input" ? 10000 : 600000;
+      milliseconds += BigInt(macroInteger(item.durationMs, 0, maximum));
+      continue;
+    }
+
+    if (item.type === "loop") {
+      const nested = calculateMacroDuration(item.children || []);
+      unknown ||= nested.unknown;
+      if (Number(item.count) === 0 || nested.indefinite) {
+        indefinite = true;
+      } else {
+        const count = BigInt(Math.max(1, macroInteger(item.count, 1, 1000)));
+        milliseconds += nested.milliseconds * count;
+      }
+      continue;
+    }
+
+    if (item.type === "raw" && item.timingUnknown !== false) unknown = true;
+  }
+
+  return { milliseconds, indefinite, unknown };
+}
+
+function formatMacroDuration(milliseconds) {
+  if (milliseconds < 1000n) return `${milliseconds} ms`;
+
+  const totalSeconds = milliseconds / 1000n;
+  const remainingMilliseconds = milliseconds % 1000n;
+  const decimal = remainingMilliseconds === 0n
+    ? ""
+    : `.${remainingMilliseconds.toString().padStart(3, "0").replace(/0+$/, "")}`;
+  if (totalSeconds < 60n) return `${totalSeconds}${decimal} s`;
+
+  const seconds = totalSeconds % 60n;
+  const totalMinutes = totalSeconds / 60n;
+  const secondsText = `${seconds.toString().padStart(2, "0")}${decimal}s`;
+  if (totalMinutes < 60n) return `${totalMinutes}m ${secondsText}`;
+
+  const minutes = totalMinutes % 60n;
+  const totalHours = totalMinutes / 60n;
+  if (totalHours < 24n) {
+    return `${totalHours}h ${minutes.toString().padStart(2, "0")}m ${secondsText}`;
+  }
+
+  const days = totalHours / 24n;
+  const hours = totalHours % 24n;
+  return `${days}d ${hours.toString().padStart(2, "0")}h ${minutes.toString().padStart(2, "0")}m`;
+}
+
+function renderMacroEditorDuration() {
+  const durationElement = $("#macroEditorDuration");
+  const valueElement = $("#macroEditorTotalDuration");
+  if (!durationElement || !valueElement) return;
+
+  const duration = calculateMacroDuration();
+  durationElement.classList.toggle("is-indefinite", duration.indefinite);
+  durationElement.classList.toggle("is-estimate", !duration.indefinite && duration.unknown);
+
+  if (duration.indefinite) {
+    valueElement.textContent = "Until release";
+    durationElement.title = "This sequence contains a loop that continues until the trigger is released.";
+  } else if (duration.unknown) {
+    const knownDuration = formatMacroDuration(duration.milliseconds);
+    valueElement.textContent = duration.milliseconds > 0n ? `≥ ${knownDuration}` : "Variable";
+    durationElement.title = duration.milliseconds > 0n
+      ? `Advanced preserved steps may contain hidden timing. Known minimum: ${duration.milliseconds} ms.`
+      : "Advanced preserved steps may contain hidden timing, so the total duration is variable.";
+  } else {
+    valueElement.textContent = formatMacroDuration(duration.milliseconds);
+    durationElement.title = `Exact configured time from the first event to the last: ${duration.milliseconds} ms.`;
+  }
+}
+
+function macroKeyOptions(selected) {
+  return macroEditorKeys.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`
+  ).join("");
+}
+
+function macroActionOptions(selected, wheelOnly = false) {
+  const actions = wheelOnly
+    ? [["tap", "Scroll"]]
+    : [["tap", "Tap"], ["down", "Hold down"], ["up", "Release"]];
+  return actions.map(([value, label]) =>
+    `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`
+  ).join("");
+}
+
+function isCompactMacroEvent(item) {
+  return item?.type === "input" || item?.type === "delay" || item?.type === "note";
+}
+
+function macroEventCards(events, depth) {
+  return events.map((item, index) => macroEventCard(item, events, index, depth)).join("");
+}
+
+function macroEventCard(item, list, index, depth) {
+  const canMoveUp = index > 0;
+  const canMoveDown = index < list.length - 1;
+  const selected = macroEventSelection.has(item.id);
+  const folded = item.type === "loop" && collapsedMacroLoops.has(item.id);
+  const foldControl = item.type === "loop"
+    ? `<button class="macro-event-action fold" type="button" data-event-command="fold" title="${folded ? "Expand loop" : "Fold loop"}" aria-label="${folded ? "Expand loop" : "Fold loop"}">${folded ? "›" : "⌄"}</button>`
+    : "";
+  const controls = `
+    <div class="macro-event-actions">
+      ${foldControl}
+      <button class="macro-event-action" type="button" data-event-command="up" title="Move up" ${canMoveUp ? "" : "disabled"}>↑</button>
+      <button class="macro-event-action" type="button" data-event-command="down" title="Move down" ${canMoveDown ? "" : "disabled"}>↓</button>
+      <button class="macro-event-action duplicate" type="button" data-event-command="duplicate" title="Duplicate event" aria-label="Duplicate event">⧉</button>
+      <button class="macro-event-action delete" type="button" data-event-command="delete" title="Delete event">×</button>
+    </div>`;
+
+  if (item.type === "delay") {
+    return `<article class="macro-event-card${selected ? " is-selected" : ""}" data-event-id="${escapeHtml(item.id)}" data-event-type="delay" aria-selected="${selected}">
+      <span class="macro-event-icon" draggable="true" title="Click to select; drag to move the selection">◷</span>
+      <div class="macro-event-main">
+        <div class="macro-event-title"><strong>Delay</strong><small>Wait before the next action</small></div>
+        <div class="macro-event-fields">
+          <label>Duration <input type="number" min="1" max="600000" step="1" value="${Math.max(1, Math.round(item.durationMs || 1))}" data-event-field="durationMs" /></label>
+          <span class="macro-event-unit">milliseconds</span>
+        </div>
+      </div>${controls}</article>`;
+  }
+
+  if (item.type === "loop") {
+    const untilReleased = Number(item.count) === 0;
+    const nestedCards = macroEventCards(item.children, depth + 1);
+    const loopButtons = depth < 3
+      ? `<button type="button" data-loop-add="input">+ Input</button>
+         <button type="button" data-loop-add="delay">+ Delay</button>
+         <button type="button" data-loop-add="loop">+ Loop</button>
+         <button type="button" data-loop-add="note">+ Note</button>`
+      : `<button type="button" data-loop-add="input">+ Input</button>
+         <button type="button" data-loop-add="delay">+ Delay</button>
+         <button type="button" data-loop-add="note">+ Note</button>`;
+    return `<article class="macro-event-card${selected ? " is-selected" : ""}${folded ? " is-folded" : ""}" data-event-id="${escapeHtml(item.id)}" data-event-type="loop" aria-selected="${selected}">
+      <span class="macro-event-icon" draggable="true" title="Click to select; drag to move the selection">↻</span>
+      <div class="macro-event-main">
+        <div class="macro-event-title"><strong>Loop</strong><small>Repeat a group of events</small></div>
+        <div class="macro-event-fields">
+          <label>Mode <select data-event-field="loopMode">
+            <option value="finite"${untilReleased ? "" : " selected"}>Repeat count</option>
+            <option value="infinite"${untilReleased ? " selected" : ""}>Until trigger released</option>
+          </select></label>
+          ${untilReleased ? "" : `<label>Times <input type="number" min="1" max="1000" step="1" value="${Math.max(1, Math.round(item.count || 2))}" data-event-field="count" /></label>`}
+        </div>
+      </div>${controls}
+      <div class="macro-loop-body" data-event-container="${escapeHtml(item.id)}">
+        <div class="macro-loop-events">${nestedCards}</div>
+        ${item.children.length ? "" : `<div class="macro-loop-empty">Add at least one event to this loop.</div>`}
+        <div class="macro-loop-add" data-loop-parent="${escapeHtml(item.id)}">${loopButtons}</div>
+      </div>
+    </article>`;
+  }
+
+  if (item.type === "note") {
+    return `<article class="macro-event-card${selected ? " is-selected" : ""}" data-event-id="${escapeHtml(item.id)}" data-event-type="note" aria-selected="${selected}">
+      <span class="macro-event-icon" draggable="true" title="Click to select; drag to move the selection">✎</span>
+      <div class="macro-event-main">
+        <div class="macro-event-title"><strong>Note</strong><small>A readable label that does not send input</small></div>
+        <div class="macro-event-fields"><input type="text" maxlength="120" value="${escapeHtml(item.text)}" data-event-field="text" /></div>
+      </div>${controls}</article>`;
+  }
+
+  if (item.type === "raw") {
+    return `<article class="macro-event-card${selected ? " is-selected" : ""}" data-event-id="${escapeHtml(item.id)}" data-event-type="raw" aria-selected="${selected}">
+      <span class="macro-event-icon" draggable="true" title="Click to select; drag to move the selection">◇</span>
+      <div class="macro-event-main">
+        <div class="macro-event-title"><strong>Advanced step</strong><small>Preserved from the original macro</small></div>
+        <span class="macro-raw-summary">${escapeHtml(item.summary || "Preserved advanced action")}</span>
+        <span class="macro-raw-lock">Its internal AHK stays unchanged and hidden.</span>
+      </div>${controls}</article>`;
+  }
+
+  const wheelOnly = item.key === "WheelUp" || item.key === "WheelDown";
+  if (wheelOnly) item.action = "tap";
+  const showDuration = item.action === "tap" && !wheelOnly;
+  return `<article class="macro-event-card${selected ? " is-selected" : ""}" data-event-id="${escapeHtml(item.id)}" data-event-type="input" aria-selected="${selected}">
+    <span class="macro-event-icon" draggable="true" title="Click to select; drag to move the selection">⌨</span>
+    <div class="macro-event-main">
+      <div class="macro-event-title"><strong>Input</strong><small>Keyboard or mouse action</small></div>
+      <div class="macro-event-fields">
+        <label>Control <select data-event-field="key">${macroKeyOptions(item.key || "LButton")}</select></label>
+        <label>Action <select data-event-field="action">${macroActionOptions(item.action || "tap", wheelOnly)}</select></label>
+        ${showDuration ? `<label>Hold <input type="number" min="0" max="10000" step="1" value="${macroInteger(item.durationMs, 0, 10000)}" data-event-field="durationMs" /></label><span class="macro-event-unit">ms</span>` : ""}
+      </div>
+    </div>${controls}</article>`;
+}
+
+function captureMacroEventLayout() {
+  return new Map(
+    $$("#macroEditorEvents .macro-event-card[data-event-id]").map(card => [
+      card.dataset.eventId,
+      card.getBoundingClientRect()
+    ])
+  );
+}
+
+function macroEventTreeIds(item) {
+  return [
+    item.id,
+    ...(item.type === "loop"
+      ? (item.children || []).flatMap(macroEventTreeIds)
+      : [])
+  ];
+}
+
+function animateMacroEventLayout(previousLayout, enteringIds = []) {
+  window.cancelAnimationFrame(macroEventAnimationFrame);
+  macroEventAnimationFrame = 0;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const entering = new Set(enteringIds);
+  macroEventAnimationFrame = window.requestAnimationFrame(() => {
+    macroEventAnimationFrame = 0;
+    const cards = $$("#macroEditorEvents .macro-event-card[data-event-id]");
+    const totalDeltas = new Map();
+
+    cards.forEach(card => {
+      const eventId = card.dataset.eventId;
+      const before = previousLayout?.get(eventId);
+      if (!before) return;
+      const after = card.getBoundingClientRect();
+      totalDeltas.set(eventId, {
+        x: before.left - after.left,
+        y: before.top - after.top
+      });
+    });
+
+    cards.forEach(card => {
+      const eventId = card.dataset.eventId;
+      const parentCard = card.parentElement?.closest(".macro-event-card[data-event-id]");
+      const parentId = parentCard?.dataset.eventId;
+      if (entering.has(eventId)) {
+        if (parentId && entering.has(parentId)) return;
+        card.animate(
+          [
+            { opacity: 0, transform: "translate3d(0, 9px, 0) scale(.985)" },
+            { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" }
+          ],
+          { duration: 220, easing: "cubic-bezier(.2, .78, .24, 1)" }
+        );
+        return;
+      }
+
+      const total = totalDeltas.get(eventId);
+      if (!total) return;
+      const parentTotal = totalDeltas.get(parentId) || { x: 0, y: 0 };
+      const deltaX = total.x - parentTotal.x;
+      const deltaY = total.y - parentTotal.y;
+      if (Math.abs(deltaX) < .5 && Math.abs(deltaY) < .5) return;
+
+      card.animate(
+        [
+          { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)`, opacity: .92 },
+          { transform: "translate3d(0, 0, 0)", opacity: 1 }
+        ],
+        { duration: 240, easing: "cubic-bezier(.2, .78, .24, 1)" }
+      );
+    });
+  });
+}
+
+function renderMacroEditorEvents({ previousLayout = null, enteringIds = [] } = {}) {
+  if (!macroEditorDocument) return;
+
+  pruneMacroEventSelection();
+
+  const list = $("#macroEditorEvents");
+  list.innerHTML = macroEditorDocument.canEditEvents
+    ? macroEventCards(macroEditorDocument.events, 0)
+    : "";
+
+  const eventCount = countMacroEvents();
+  $("#macroEditorEventCount").textContent = `${eventCount} event${eventCount === 1 ? "" : "s"}`;
+  $("#macroEditorEmpty").classList.toggle("hidden", macroEditorDocument.events.length > 0);
+  $("#macroClearAllButton").disabled = eventCount === 0 || macroRecordingState.recording || !macroEditorDocument.canEditEvents;
+  renderMacroEditorDuration();
+  renderMacroPreviewButton();
+  if (previousLayout || enteringIds.length) {
+    animateMacroEventLayout(previousLayout, enteringIds);
+  }
+}
+
+function addMacroEditorEvent(type, parentLoopId = "") {
+  if (!macroEditorDocument?.canSave || !macroEditorDocument.canEditEvents || macroRecordingState.recording) return;
+  const previousLayout = captureMacroEventLayout();
+  const event = createMacroEvent(type);
+  if (!parentLoopId) {
+    recordMacroEventHistory("add");
+    macroEditorDocument.events.push(event);
+  } else {
+    const parent = findMacroEvent(parentLoopId);
+    if (!parent || parent.item.type !== "loop") return;
+    if (type === "loop" && parent.depth >= 3) {
+      showToast("Loops can be nested up to four levels.", true);
+      return;
+    }
+    recordMacroEventHistory("add");
+    parent.item.children.push(event);
+  }
+  renderMacroEditorEvents({ previousLayout, enteringIds: macroEventTreeIds(event) });
+}
+
+function moveMacroEditorEvent(eventId, direction) {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording) return;
+  const location = findMacroEvent(eventId);
+  if (!location) return;
+  const nextIndex = location.index + direction;
+  if (nextIndex < 0 || nextIndex >= location.list.length) return;
+  const previousLayout = captureMacroEventLayout();
+  recordMacroEventHistory("move");
+  [location.list[location.index], location.list[nextIndex]] =
+    [location.list[nextIndex], location.list[location.index]];
+  renderMacroEditorEvents({ previousLayout });
+}
+
+function deleteMacroEditorEvent(eventId) {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording) return;
+  const location = findMacroEvent(eventId);
+  if (!location) return;
+  recordMacroEventHistory("delete");
+  location.list.splice(location.index, 1);
+  renderMacroEditorEvents();
+}
+
+function clearAllMacroEditorEvents() {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording || countMacroEvents() === 0) return;
+  recordMacroEventHistory("clear");
+  macroEditorDocument.events = [];
+  macroRecordingBaseline = null;
+  renderMacroEditorEvents();
+}
+
+function duplicateMacroEventTree(item) {
+  return {
+    ...item,
+    id: newMacroEventId(),
+    children: (item.children || []).map(duplicateMacroEventTree)
+  };
+}
+
+function duplicateMacroEditorEvent(eventId) {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording) return;
+  const location = findMacroEvent(eventId);
+  if (!location) return;
+  const previousLayout = captureMacroEventLayout();
+  const duplicate = duplicateMacroEventTree(location.item);
+  recordMacroEventHistory("duplicate");
+  location.list.splice(location.index + 1, 0, duplicate);
+  renderMacroEditorEvents({ previousLayout, enteringIds: macroEventTreeIds(duplicate) });
+}
+
+function macroEventContainsId(item, eventId) {
+  if (item.id === eventId) return true;
+  return item.type === "loop" && (item.children || []).some(child => macroEventContainsId(child, eventId));
+}
+
+function selectedMacroEventRoots() {
+  const selected = macroEventSelection.size
+    ? new Set(macroEventSelection)
+    : new Set(macroEventDragId ? [macroEventDragId] : []);
+  const roots = [];
+  const visit = (events, ancestorSelected = false) => {
+    for (const item of events) {
+      const itemSelected = selected.has(item.id);
+      if (itemSelected && !ancestorSelected) roots.push(item);
+      if (item.type === "loop") visit(item.children || [], ancestorSelected || itemSelected);
+    }
+  };
+  visit(macroEditorDocument?.events || []);
+  return roots;
+}
+
+function macroEventLoopLevels(item) {
+  if (item.type !== "loop") return 0;
+  return 1 + (item.children || []).reduce(
+    (maximum, child) => Math.max(maximum, macroEventLoopLevels(child)),
+    0
+  );
+}
+
+function macroEventContainerLocation(container) {
+  if (!container || container.dataset.eventContainer === "root") {
+    return { list: macroEditorDocument?.events || [], parentLoop: null, depth: 0 };
+  }
+
+  const parent = findMacroEvent(container.dataset.eventContainer);
+  if (!parent || parent.item.type !== "loop") return null;
+  return { list: parent.item.children, parentLoop: parent.item, depth: parent.depth + 1 };
+}
+
+function clearMacroEventDropState() {
+  $$(".macro-event-card.drag-before, .macro-event-card.drag-after, .macro-event-card.drag-over").forEach(card => {
+    card.classList.remove("drag-before", "drag-after", "drag-over");
+  });
+  $$("[data-event-container].drag-target-container").forEach(container => {
+    container.classList.remove("drag-target-container");
+  });
+}
+
+function resolveMacroEventDrop(event) {
+  const sources = selectedMacroEventRoots()
+    .map(item => findMacroEvent(item.id))
+    .filter(Boolean);
+  const container = event.target.closest("[data-event-container]") || $("#macroEditorEvents");
+  const destination = macroEventContainerLocation(container);
+  if (!sources.length || !destination) return null;
+
+  if (destination.parentLoop && sources.some(source =>
+      macroEventContainsId(source.item, destination.parentLoop.id))) {
+    return null;
+  }
+  if (sources.some(source => destination.depth + macroEventLoopLevels(source.item) > 4)) {
+    return null;
+  }
+
+  let targetCard = event.target.closest("[data-event-id]");
+  let target = targetCard ? findMacroEvent(targetCard.dataset.eventId) : null;
+  if (target && sources.some(source =>
+      source.item === target.item || macroEventContainsId(source.item, target.item.id))) {
+    return null;
+  }
+  if (!target || target.list !== destination.list) {
+    target = null;
+    targetCard = null;
+  }
+
+  const placeAfter = targetCard
+    ? event.clientY > targetCard.getBoundingClientRect().top + targetCard.getBoundingClientRect().height / 2
+    : true;
+  const insertionIndex = target ? target.index + (placeAfter ? 1 : 0) : destination.list.length;
+  return { sources, destination, container, target, targetCard, placeAfter, insertionIndex };
+}
+
+function applyMacroEventDrop(drop) {
+  recordMacroEventHistory("drag");
+  const movingItems = drop.sources.map(source => source.item);
+  const removals = new Map();
+  drop.sources.forEach(source => {
+    if (!removals.has(source.list)) removals.set(source.list, []);
+    removals.get(source.list).push(source.index);
+  });
+  removals.forEach((indices, list) => {
+    indices.sort((left, right) => right - left).forEach(index => list.splice(index, 1));
+  });
+
+  let insertionIndex;
+  if (drop.target && drop.destination.list.includes(drop.target.item)) {
+    insertionIndex = drop.destination.list.indexOf(drop.target.item) + (drop.placeAfter ? 1 : 0);
+  } else {
+    insertionIndex = drop.destination.list.length;
+  }
+  drop.destination.list.splice(insertionIndex, 0, ...movingItems);
+}
+
+function updateMacroEditorEvent(eventId, field, value) {
+  if (!macroEditorDocument?.canEditEvents || macroRecordingState.recording) return;
+  const location = findMacroEvent(eventId);
+  if (!location) return;
+  const item = location.item;
+  recordMacroEventHistory(`field:${eventId}:${field}`);
+
+  if (field === "loopMode") {
+    item.count = value === "infinite" ? 0 : Math.max(1, Number(item.count) || 2);
+    renderMacroEditorEvents();
+    return;
+  }
+  if (field === "durationMs") {
+    item.durationMs = macroInteger(value, 0, item.type === "input" ? 10000 : 600000);
+  } else if (field === "count") {
+    item.count = Math.max(1, macroInteger(value, 1, 1000));
+  } else item[field] = value;
+
+  if (field === "key" && (value === "WheelUp" || value === "WheelDown")) {
+    item.action = "tap";
+    renderMacroEditorEvents();
+  } else if (field === "action") {
+    if (value === "tap" && !item.durationMs) item.durationMs = 30;
+    renderMacroEditorEvents();
+  } else {
+    renderMacroEditorDuration();
+  }
+}
+
+function cleanMacroEditorEvents(events) {
+  return events.map(item => ({
+    id: item.id,
+    type: item.type,
+    key: item.key || "",
+    action: item.action || "",
+    durationMs: macroInteger(item.durationMs, 0, item.type === "input" ? 10000 : 600000),
+    count: macroInteger(item.count, 0, 1000),
+    text: item.text || "",
+    rawId: item.rawId || "",
+    summary: item.summary || "",
+    timingUnknown: item.timingUnknown !== false,
+    children: item.type === "loop" ? cleanMacroEditorEvents(item.children || []) : []
+  }));
+}
+
+function macroEditorRequest() {
+  return {
+    sessionId: macroEditorDocument?.sessionId || "",
+    comboId: macroEditorDocument?.comboId || "",
+    character: macroEditorDocument?.character || "",
+    name: $("#macroEditorName").value.trim(),
+    description: $("#macroEditorDescription").value.trim(),
+    fpsTag: $("#macroEditorFpsTag").value,
+    testing: $("#macroEditorTestingTag").checked,
+    macroTrigger: macroEditorDocument?.macroTrigger || "",
+    events: macroEditorDocument?.canEditEvents
+      ? cleanMacroEditorEvents(macroEditorDocument.events)
+      : []
+  };
+}
+
+function renderMacroPreviewButton() {
+  const button = $("#previewMacroEditorButton");
+  if (!button) return;
+  button.textContent = macroPreviewRunning ? "Stop test" : "Test changes";
+  button.classList.toggle("is-running", macroPreviewRunning);
+  button.disabled = macroEditorSaving || macroRecordingState.recording ||
+    !macroEditorDocument?.canEditEvents || countMacroEvents() === 0;
+}
+
+function invalidateMacroPreview() {
+  if (!macroPreviewRunning) return;
+  macroPreviewRunning = false;
+  post("stopMacroPreview");
+  renderMacroPreviewButton();
+}
+
+function toggleMacroPreview() {
+  if (!macroEditorDocument?.canEditEvents || macroEditorSaving || macroRecordingState.recording) return;
+  if (macroPreviewRunning) {
+    post("stopMacroPreview");
+    return;
+  }
+  if (macroEditorDocument.events.length === 0) {
+    showToast("Add at least one event before testing.", true);
+    return;
+  }
+  post("testMacroDefinition", macroEditorRequest());
+}
+
+function submitMacroEditor(event) {
   event.preventDefault();
-
-  const target = macroEditTarget;
-  const comboName = $("#macroEditName").value.trim();
-  const tooltip = $("#macroEditDescription").value.trim();
-  const tags = [
-    $("#macroEditFpsTag").value,
-    $("#macroEditTestingTag").checked ? "TESTING" : ""
-  ].filter(Boolean);
-
-  if (!target || !getSelectedCombo() || target.comboId !== getSelectedCombo().value) {
-    showToast("The selected macro is no longer available.", true);
-    closeMacroEdit();
+  if (!macroEditorDocument?.canSave || macroEditorSaving) return;
+  if (macroRecordingState.recording) {
+    showToast("Stop recording before saving the macro.", true);
     return;
   }
-  if (!comboName) {
+
+  const name = $("#macroEditorName").value.trim();
+  const description = $("#macroEditorDescription").value.trim();
+  if (!name) {
     showToast("Macro name is required.", true);
+    $("#macroEditorName").focus();
     return;
   }
-  if (/[\r\n\t=|]/.test(comboName) || /[\r\n\t=|]/.test(tooltip)) {
+  if (/[\r\n\t=|]/.test(name) || /[\r\n\t=|]/.test(description)) {
     showToast("Names cannot contain tabs, line breaks, =, or |.", true);
     return;
   }
+  if (macroEditorDocument.canEditEvents && macroEditorDocument.events.length === 0) {
+    showToast("Add at least one event before saving.", true);
+    return;
+  }
 
-  closeMacroEdit();
-  post("editMacro", {
-    comboId: target.comboId,
-    comboName,
-    tooltip,
-    tag: tags.join(", ")
-  });
+  setMacroEditorSaving(true);
+  if (macroPreviewRunning) post("stopMacroPreview");
+  const sent = post("saveMacroDefinition", macroEditorRequest());
+  if (!sent) setMacroEditorSaving(false);
 }
 
 function openMacroDelete(combo) {
   if (!combo || combo.builtIn) return;
-
-  const macroCount = characterCatalog[state.character]?.combos?.length || 0;
-  if (macroCount <= 1) {
-    showToast("Import another macro for this character before deleting its last macro.", true);
-    return;
-  }
 
   macroDeleteTarget = {
     comboId: combo.value,
@@ -1578,10 +2732,12 @@ $$('.nav-item').forEach(button => button.addEventListener('click', () => navigat
 $$('[data-window-action]').forEach(button => button.addEventListener('click', () => {
   if (button.dataset.windowAction === 'close') post('windowClose');
   if (button.dataset.windowAction === 'minimize') post('windowMinimize');
+  if (button.dataset.windowAction === 'maximize') post('windowToggleMaximize');
 }));
 
 $('#titlebar').addEventListener('mousedown', event => {
-  if (!event.target.closest('button')) post('windowDrag');
+  if (event.target.closest('button')) return;
+  post(event.detail >= 2 ? 'windowToggleMaximize' : 'windowDrag');
 });
 
 $('#startGameButton').addEventListener('click', () => {
@@ -1658,11 +2814,10 @@ $('#hotkeyModal').addEventListener('pointerdown', event => {
   event.preventDefault();
   event.stopPropagation();
   const mappedKey = event.button === 3 ? 'XButton1' : 'XButton2';
-  $('#capturedKey').textContent = mappedKey;
-  post('setHotkey', { target: captureTarget.target, value: mappedKey });
-  endHotkeyCapture();
+  commitCapturedHotkey(mappedKey);
 });
 $('#addMacroButton').addEventListener('click', openMacroImport);
+$('#createMacroButton').addEventListener('click', openMacroCreate);
 $('#editMacroButton').addEventListener('click', () => {
   const selectedCombo = getSelectedCombo();
   if (selectedCombo && !state.macroRunning) {
@@ -1682,10 +2837,156 @@ $('#deleteMacroButton').addEventListener('click', () => {
     openMacroDelete(selectedCombo);
   }
 });
-$('#cancelMacroEditButton').addEventListener('click', closeMacroEdit);
-$('#macroEditForm').addEventListener('submit', submitMacroEdit);
-$('#macroEditModal').addEventListener('mousedown', event => {
-  if (event.target === $('#macroEditModal')) closeMacroEdit();
+$('#cancelMacroEditorButton').addEventListener('click', () => closeMacroEditor());
+$('#closeMacroEditorButton').addEventListener('click', () => closeMacroEditor());
+$('#macroEditorForm').addEventListener('submit', submitMacroEditor);
+$('#previewMacroEditorButton').addEventListener('click', toggleMacroPreview);
+$('#macroEditorModal').addEventListener('mousedown', event => {
+  if (event.target === $('#macroEditorModal')) closeMacroEditor();
+});
+$$('[data-macro-add]').forEach(button => button.addEventListener('click', () => {
+  addMacroEditorEvent(button.dataset.macroAdd);
+}));
+
+const macroEditorEventsElement = $('#macroEditorEvents');
+macroEditorEventsElement.addEventListener('click', event => {
+  const commandButton = event.target.closest('[data-event-command]');
+  if (commandButton) {
+    const card = commandButton.closest('[data-event-id]');
+    if (!card) return;
+    const command = commandButton.dataset.eventCommand;
+    if (command === 'up') moveMacroEditorEvent(card.dataset.eventId, -1);
+    else if (command === 'down') moveMacroEditorEvent(card.dataset.eventId, 1);
+    else if (command === 'duplicate') duplicateMacroEditorEvent(card.dataset.eventId);
+    else if (command === 'delete') deleteMacroEditorEvent(card.dataset.eventId);
+    else if (command === 'fold') {
+      if (collapsedMacroLoops.has(card.dataset.eventId)) collapsedMacroLoops.delete(card.dataset.eventId);
+      else collapsedMacroLoops.add(card.dataset.eventId);
+      renderMacroEditorEvents();
+    }
+    return;
+  }
+
+  const addButton = event.target.closest('[data-loop-add]');
+  if (addButton) {
+    const parent = addButton.closest('[data-loop-parent]');
+    if (parent) addMacroEditorEvent(addButton.dataset.loopAdd, parent.dataset.loopParent);
+    return;
+  }
+
+  const card = event.target.closest('[data-event-id]');
+  if (!card || event.target.closest('input, select, button')) return;
+  selectMacroEvent(card.dataset.eventId, {
+    additive: event.ctrlKey || event.metaKey,
+    range: event.shiftKey
+  });
+});
+
+function handleMacroEditorFieldChange(event) {
+  const field = event.target.closest('[data-event-field]');
+  if (!field) return;
+  const card = field.closest('[data-event-id]');
+  if (!card) return;
+  updateMacroEditorEvent(card.dataset.eventId, field.dataset.eventField, field.value);
+}
+
+macroEditorEventsElement.addEventListener('change', handleMacroEditorFieldChange);
+macroEditorEventsElement.addEventListener('input', event => {
+  if (['text', 'durationMs', 'count'].includes(event.target.dataset.eventField)) {
+    handleMacroEditorFieldChange(event);
+  }
+});
+
+macroEditorEventsElement.addEventListener('dragstart', event => {
+  if (macroRecordingState.recording) {
+    event.preventDefault();
+    return;
+  }
+  const card = event.target.closest('[data-event-id]');
+  if (!card || event.target.closest('input, select, button')) {
+    event.preventDefault();
+    return;
+  }
+  macroEventDragId = card.dataset.eventId;
+  if (!macroEventSelection.has(macroEventDragId)) {
+    macroEventSelection = new Set([macroEventDragId]);
+    macroEventSelectionAnchor = macroEventDragId;
+    syncMacroEventSelectionClasses();
+  }
+  macroEventDragIds = selectedMacroEventRoots().map(item => item.id);
+  macroEventDragIds.forEach(id => {
+    macroEditorEventsElement.querySelector(`[data-event-id="${CSS.escape(id)}"]`)?.classList.add('is-dragging');
+  });
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', macroEventDragIds.join(','));
+});
+
+macroEditorEventsElement.addEventListener('dragover', event => {
+  clearMacroEventDropState();
+  const drop = resolveMacroEventDrop(event);
+  if (!drop) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  drop.container.classList.add('drag-target-container');
+  if (drop.targetCard) {
+    drop.targetCard.classList.add(drop.placeAfter ? 'drag-after' : 'drag-before');
+  }
+});
+
+macroEditorEventsElement.addEventListener('drop', event => {
+  const drop = resolveMacroEventDrop(event);
+  if (!drop) return;
+  event.preventDefault();
+
+  const previousLayout = captureMacroEventLayout();
+  applyMacroEventDrop(drop);
+  macroEventDragId = '';
+  macroEventDragIds = [];
+  clearMacroEventDropState();
+  renderMacroEditorEvents({ previousLayout });
+});
+
+macroEditorEventsElement.addEventListener('dragend', () => {
+  macroEventDragId = '';
+  macroEventDragIds = [];
+  clearMacroEventDropState();
+  $$('.macro-event-card.is-dragging').forEach(card => {
+    card.classList.remove('is-dragging');
+  });
+});
+
+$('#toggleMacroDetailsButton').addEventListener('click', () => {
+  const shell = $('#macroEditorForm');
+  const collapsed = shell.classList.toggle('details-collapsed');
+  $('#toggleMacroDetailsButton').setAttribute('aria-pressed', String(collapsed));
+  $('#toggleMacroDetailsButton').textContent = collapsed ? 'Expand' : 'Collapse';
+  $('#toggleMacroDetailsButton').title = collapsed ? 'Expand macro details' : 'Collapse macro details';
+});
+
+$('#macroTriggerCaptureButton').addEventListener('click', beginMacroTriggerCapture);
+$('#macroTriggerClearButton').addEventListener('click', () => {
+  if (!macroEditorDocument || macroRecordingState.recording) return;
+  macroEditorDocument.macroTrigger = '';
+  renderMacroTrigger();
+});
+$('#macroClearAllButton').addEventListener('click', clearAllMacroEditorEvents);
+
+$('#macroRecorderToggleButton').addEventListener('click', () => {
+  post(macroRecordingState.recording ? 'stopMacroRecording' : 'startMacroRecording');
+});
+$('#macroRecorderLastWindow').addEventListener('change', event => {
+  $('#macroRecorderWindowSeconds').disabled = !event.target.checked;
+  queueMacroRecordingSettings();
+});
+$('#macroRecorderWindowSeconds').addEventListener('change', queueMacroRecordingSettings);
+$('#macroRecorderKeys').addEventListener('change', queueMacroRecordingSettings);
+$('#macroRecorderSelectAll').addEventListener('click', () => {
+  $$('#macroRecorderKeys input').forEach(input => { input.checked = true; });
+  queueMacroRecordingSettings();
+});
+$('#macroRecorderSelectNone').addEventListener('click', () => {
+  $$('#macroRecorderKeys input').forEach(input => { input.checked = false; });
+  queueMacroRecordingSettings();
 });
 
 $('#cancelMacroDeleteButton').addEventListener('click', closeMacroDelete);
@@ -1718,13 +3019,45 @@ window.addEventListener('keydown', event => {
     return;
   }
 
-  if (event.key === 'Escape' && !$('#macroDeleteModal').classList.contains('hidden')) {
-    closeMacroDelete();
+  if (captureTarget) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === 'Escape') {
+      endHotkeyCapture();
+      return;
+    }
+
+    const mappedKey = mapKeyboardEvent(event);
+    if (!mappedKey) {
+      $('#capturedKey').textContent = t("unsupported");
+      return;
+    }
+
+    commitCapturedHotkey(mappedKey);
     return;
   }
 
-  if (event.key === 'Escape' && !$('#macroEditModal').classList.contains('hidden')) {
-    closeMacroEdit();
+  const macroEditorOpen = !$('#macroEditorModal').classList.contains('hidden');
+  const historyShortcut = (event.ctrlKey || event.metaKey) && !event.altKey;
+  const historyKey = event.key.toLowerCase();
+  const textEditing = event.target instanceof HTMLElement &&
+    (event.target.isContentEditable || event.target.matches('input[type="text"], textarea'));
+  if (macroEditorOpen && historyShortcut && !textEditing &&
+      (historyKey === 'z' || historyKey === 'y')) {
+    event.preventDefault();
+    if (historyKey === 'y' || (historyKey === 'z' && event.shiftKey)) redoMacroEditorEvents();
+    else undoMacroEditorEvents();
+    return;
+  }
+
+  if (event.key === 'Escape' && !$('#macroEditorModal').classList.contains('hidden')) {
+    closeMacroEditor();
+    return;
+  }
+
+  if (event.key === 'Escape' && !$('#macroDeleteModal').classList.contains('hidden')) {
+    closeMacroDelete();
     return;
   }
 
@@ -1733,24 +3066,6 @@ window.addEventListener('keydown', event => {
     return;
   }
 
-  if (!captureTarget) return;
-  event.preventDefault();
-  event.stopPropagation();
-
-  if (event.key === 'Escape') {
-    endHotkeyCapture();
-    return;
-  }
-
-  const mappedKey = mapKeyboardEvent(event);
-  if (!mappedKey) {
-    $('#capturedKey').textContent = t("unsupported");
-    return;
-  }
-
-  $('#capturedKey').textContent = mappedKey;
-  post('setHotkey', { target: captureTarget.target, value: mappedKey });
-  endHotkeyCapture();
 });
 
 const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
@@ -1763,6 +3078,7 @@ applyStaticTranslations();
 loadBuildInfo();
 
 bridge?.addEventListener('message', event => applyMessage(event.data));
+post('closeMacroEditorSession');
 requestState();
 render();
 

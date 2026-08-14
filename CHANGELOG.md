@@ -1,16 +1,25 @@
 # Changelog
 
+## v1.7.6
+
+- Added subtle `scale(0.98)` press feedback to combo cards and hotkey buttons, with reduced-motion support.
+- Added lightweight insertion and FLIP reordering animations to the visual macro timeline, including moves into and out of loops.
+
 ## v1.7.5
 
-- Added a Hotkeys activation scope with `Everywhere` and `Game only` modes; existing installations default to `Game only`.
-- Removed the global macro ON/OFF control from the application, runtime settings, and tray menu.
-- Added an optional FPS limiter with a 10–420 FPS range, presets, saved settings, and live connection status, using a native component adapted from PowerPaimon.
-- Refined the Hotkeys and FPS layouts with balanced scope controls, a compact slider, consistent card hover behavior, and a concise risk tooltip.
-- Made the taskbar icon update automatically to match the selected character, using the `.ico` files in `Assets\icons`.
-- Reworked macro importing to read names, descriptions, and tags from AHK comment metadata, generate safe fallback names, and handle duplicates automatically.
-- Added editing for imported macro names, descriptions, FPS tags, and TESTING tags while preserving stable macro IDs and package folders.
-- Reorganized the Dashboard by integrating Quick Controls, Application Mode, and Skip Dialog Behavior into the selected Character Combos card.
-- Improved character and macro card sizing for a cleaner responsive desktop layout.
+- Added the complete visual macro editor: creation and safe editing, nested/foldable loops, grouped steps, duration totals, duplication, Clear all, multi-selection, cross-loop dragging, undo/redo, and consistent event styling.
+- Added `Test changes`, which temporarily arms the unsaved macro for its trigger without saving, plus optional per-macro triggers with validation and persistence.
+- Added keyboard and mouse-button recording with exact delays, a themed floating control, last-N-seconds capture, an allowed-key filter, and a configurable Hotkeys shortcut.
+- Protected imported and unknown AHK sources with metadata-only editing, while managed visual macros use atomic saves, conflict checks, high-resolution timing, and maximum-speed input settings.
+- Improved import/export metadata, stable IDs and folders, duplicate handling, stale-header cleanup, package recovery, and reliable atomic macro ordering.
+- Added the Hotkeys `Everywhere` / `Game only` scope, the global `F11` Interface shortcut, shared key-conflict rules, and temporary topmost behavior only while needed.
+- Added the optional 10–420 FPS limiter with presets, persistence, connection status, a responsive layout, and a concise compatibility-risk tooltip.
+- Rebuilt Characters and Combos with responsive cards, drag reordering, monospaced combo commands, consistent outlined selection, and deletion of a character's final macro without removing its card.
+- Rebuilt the macro action toolbar with accessible SVG icons, distinct Import/Export actions, and an isolated destructive Delete action.
+- Refined create/edit metadata with consistent `(Optional)` labels, a compact FPS/Test row, a smaller `Test` badge, and readable warnings in both themes.
+- Improved the Dashboard, light/dark styling, sidebar preference controls, character-sized taskbar icons, maximized-window layouts, and window maximize/restore behavior.
+- Removed the global macro ON/OFF state and simplified timeline, details, and Hotkeys microcopy.
+- Added the AutoHotkey v1.1 prerequisite check and hardened automatic updates with validated in-place fallback and rollback protection.
 
 ## v1.7.4
 
