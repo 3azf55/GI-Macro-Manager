@@ -119,6 +119,36 @@ try {
         throw "Publish finished without creating UMM.UI.exe."
     }
 
+    # A successful dotnet publish is not enough if stale WebView assets were
+    # staged. Verify every source UI file byte-for-byte before replacing dist.
+    $SourceUi = Join-Path $PackageRoot "UIHost\ui"
+    $PublishedUi = Join-Path $PublishTemp "ui"
+    if (-not (Test-Path -LiteralPath $PublishedUi -PathType Container)) {
+        throw "Publish finished without creating the ui folder: $PublishedUi"
+    }
+
+    $SourceUiFiles = @(Get-ChildItem -LiteralPath $SourceUi -File -Recurse)
+    $PublishedUiFiles = @(Get-ChildItem -LiteralPath $PublishedUi -File -Recurse)
+    if ($SourceUiFiles.Count -ne $PublishedUiFiles.Count) {
+        throw "Published UI file count does not match the source UI ($($PublishedUiFiles.Count) published, $($SourceUiFiles.Count) source)."
+    }
+
+    foreach ($SourceUiFile in $SourceUiFiles) {
+        $RelativeUiPath = $SourceUiFile.FullName.Substring($SourceUi.Length).TrimStart('\')
+        $PublishedUiFile = Join-Path $PublishedUi $RelativeUiPath
+        if (-not (Test-Path -LiteralPath $PublishedUiFile -PathType Leaf)) {
+            throw "Published UI file is missing: $RelativeUiPath"
+        }
+
+        $SourceUiHash = (Get-FileHash -LiteralPath $SourceUiFile.FullName -Algorithm SHA256).Hash
+        $PublishedUiHash = (Get-FileHash -LiteralPath $PublishedUiFile -Algorithm SHA256).Hash
+        if ($SourceUiHash -ne $PublishedUiHash) {
+            throw "Published UI file is stale: $RelativeUiPath"
+        }
+    }
+
+    Write-Host "Verified published UI matches UIHost\ui." -ForegroundColor Green
+
     Copy-Item (Join-Path $PackageRoot "UMM.Engine.ahk") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "README.md") $PublishTemp -Force
     Copy-Item (Join-Path $PackageRoot "CHANGELOG.md") $PublishTemp -Force
@@ -223,7 +253,12 @@ try {
     Write-Host $FinalExe
     Write-Host ""
     Write-Host ("Version: {0} | Build date: {1}" -f $BuildVersion, $BuildInfo.buildDate)
-    Write-Host "Run dist\UMM.Engine.ahk to start Macro Manager."
+    $LegacyUiExe = Join-Path $PackageRoot "UMM.UI.exe"
+    if (Test-Path -LiteralPath $LegacyUiExe -PathType Leaf) {
+        Write-Warning "A legacy root UMM.UI.exe exists. The updated UMM.Engine.ahk now prefers dist\UMM.UI.exe."
+    }
+
+    Write-Host "Run UMM.Engine.ahk from the project root or dist\UMM.Engine.ahk to start the new build."
 }
 catch {
     if (Test-Path $PublishTemp) {

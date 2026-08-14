@@ -4,6 +4,7 @@
 
 - Added subtle `scale(0.98)` press feedback to combo cards and hotkey buttons, with reduced-motion support.
 - Added lightweight insertion and FLIP reordering animations to the visual macro timeline, including moves into and out of loops.
+- Aligned source validation with the full-width macro toolbar and its isolated Delete action.
 
 ## v1.7.5
 

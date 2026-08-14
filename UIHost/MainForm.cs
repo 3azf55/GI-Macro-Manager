@@ -45,6 +45,12 @@ public sealed class MainForm : Form
             ["exitEngine"] = CommandFields()
         };
 
+    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+        MaxDepth = 16
+    };
+
     private readonly WebView2 _webView = new();
     private readonly string _rootDirectory;
     private readonly bool _enableDevTools;
@@ -62,6 +68,8 @@ public sealed class MainForm : Form
     private readonly string _lastUpdateCheckPath;
     private readonly GitHubUpdateService _updateService = new();
     private readonly FpsUnlockService _fpsUnlockService;
+    private readonly MacroEditorService _macroEditorService;
+    private readonly KeyboardRecordingService _keyboardRecordingService;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private UpdateCheckResult? _availableUpdate;
     private bool _webReady;
@@ -96,6 +104,9 @@ public sealed class MainForm : Form
         _fpsUnlockService = new FpsUnlockService(
             settingsDirectory,
             Path.Combine(AppContext.BaseDirectory, "Native", "UnlockerStub.dll"));
+        _macroEditorService = new MacroEditorService(_rootDirectory);
+        _keyboardRecordingService = new KeyboardRecordingService(settingsDirectory);
+        _keyboardRecordingService.SnapshotChanged += OnMacroRecordingSnapshotChanged;
 
         _bridgeDirectory = Path.Combine(_rootDirectory, "bridge");
         _commandsDirectory = Path.Combine(_bridgeDirectory, "commands");
@@ -108,7 +119,7 @@ public sealed class MainForm : Form
         Text = "Macro Manager";
         AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None;
-        MaximizeBox = false;
+        MaximizeBox = true;
         MinimizeBox = true;
         SizeGripStyle = SizeGripStyle.Hide;
         ShowIcon = true;
@@ -116,8 +127,7 @@ public sealed class MainForm : Form
 
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(DefaultClientWidth, DefaultClientHeight);
-        MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);
-        MaximumSize = new Size(DefaultClientWidth, DefaultClientHeight);
+        MinimumSize = new Size(920, 600);
         RestoreWindowPlacement();
         UpdateTaskbarIcon(string.Empty);
 
@@ -143,6 +153,11 @@ public sealed class MainForm : Form
         };
 
         Move += (_, _) => ScheduleWindowPlacementSave();
+        SizeChanged += (_, _) =>
+        {
+            ScheduleWindowPlacementSave();
+            PostWindowState();
+        };
 
         _singleInstanceTimer.Interval = 160;
         _singleInstanceTimer.Tick += (_, _) =>
@@ -233,6 +248,7 @@ public sealed class MainForm : Form
 
                 _webReady = true;
                 BeginFileBridge();
+                PostWindowState();
                 PostFpsStateIfChanged(force: true);
                 PostPreviousUpdateResult();
                 if (ShouldRunAutomaticUpdateCheck())
@@ -241,7 +257,12 @@ public sealed class MainForm : Form
                 }
             };
 
-            core.Navigate("https://app.umm/index.html");
+            // The UI is served from a local virtual host, but WebView2 may
+            // retain an older index document between application builds.
+            // A per-process query keeps every launch tied to the files beside
+            // the executable that was actually started.
+            var uiLaunchToken = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            core.Navigate($"https://app.umm/index.html?launch={uiLaunchToken}");
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -304,8 +325,14 @@ public sealed class MainForm : Form
                 case "windowMinimize":
                     WindowState = FormWindowState.Minimized;
                     return;
+                case "windowToggleMaximize":
+                    ToggleWindowMaximize();
+                    return;
                 case "windowDrag":
                     BeginWindowDrag();
+                    return;
+                case "setTransientTopMost":
+                    HandleSetTransientTopMost(root);
                     return;
                 case "browseAutoLaunch":
                     BrowseForExecutable();
@@ -324,6 +351,43 @@ public sealed class MainForm : Form
                     return;
                 case "setFpsTarget":
                     HandleSetFpsTarget(root);
+                    return;
+                case "loadMacroDefinition":
+                    HandleLoadMacroDefinition(root);
+                    return;
+                case "createMacroDefinition":
+                    HandleCreateMacroDefinition(root);
+                    return;
+                case "saveMacroDefinition":
+                    HandleSaveMacroDefinition(root);
+                    return;
+                case "testMacroDefinition":
+                    HandleTestMacroDefinition(root);
+                    return;
+                case "stopMacroPreview":
+                    SendEngineCommand("stopMacroPreview", reportFailure: false);
+                    return;
+                case "getMacroRecordingState":
+                    PostMacroRecordingSnapshot(_keyboardRecordingService.GetSnapshot());
+                    return;
+                case "setMacroRecordingTheme":
+                    HandleSetMacroRecordingTheme(root);
+                    return;
+                case "setMacroRecordingSettings":
+                    HandleSetMacroRecordingSettings(root);
+                    return;
+                case "startMacroRecording":
+                    HandleStartMacroRecording();
+                    return;
+                case "stopMacroRecording":
+                    _keyboardRecordingService.Stop();
+                    return;
+                case "toggleMacroRecording":
+                    HandleToggleMacroRecording();
+                    return;
+                case "closeMacroEditorSession":
+                    SendEngineCommand("stopMacroPreview", reportFailure: false);
+                    CloseMacroRecordingSession();
                     return;
             }
 
@@ -349,6 +413,340 @@ public sealed class MainForm : Form
         }
     }
 
+    private void HandleSetTransientTopMost(JsonElement root)
+    {
+        if (!root.TryGetProperty("active", out var activeElement) ||
+            (activeElement.ValueKind != JsonValueKind.True && activeElement.ValueKind != JsonValueKind.False))
+        {
+            return;
+        }
+
+        TopMost = activeElement.GetBoolean();
+        if (TopMost && WindowState != FormWindowState.Minimized)
+        {
+            Show();
+            BringToFront();
+            Activate();
+        }
+    }
+
+    private void HandleSetMacroRecordingTheme(JsonElement root)
+    {
+        if (!root.TryGetProperty("theme", out var themeElement) || themeElement.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+
+        var theme = themeElement.GetString();
+        if (theme is not ("dark" or "light"))
+        {
+            return;
+        }
+
+        _keyboardRecordingService.SetTheme(theme);
+    }
+
+    private void HandleLoadMacroDefinition(JsonElement root)
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before editing a macro.");
+            return;
+        }
+
+        if (!TryReadWebString(root, "comboId", 120, out var comboId))
+        {
+            PostMacroEditorError("Select a valid macro first.");
+            return;
+        }
+
+        try
+        {
+            var document = _macroEditorService.Load(comboId);
+            PostObjectToWeb(new
+            {
+                type = "macroEditorDocument",
+                document
+            });
+            OpenMacroRecordingSession(document.CanEditEvents);
+        }
+        catch (Exception exception) when (IsMacroEditorFailure(exception))
+        {
+            Log($"Could not load macro {comboId} in the visual editor: {exception.Message}");
+            PostMacroEditorError(exception.Message);
+        }
+    }
+
+    private void HandleCreateMacroDefinition(JsonElement root)
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before creating a macro.");
+            return;
+        }
+
+        if (!TryReadWebString(root, "character", 50, out var character))
+        {
+            PostMacroEditorError("Select a valid character first.");
+            return;
+        }
+
+        try
+        {
+            var document = _macroEditorService.CreateDraft(character);
+            PostObjectToWeb(new
+            {
+                type = "macroEditorDocument",
+                document
+            });
+            OpenMacroRecordingSession(document.CanEditEvents);
+        }
+        catch (Exception exception) when (IsMacroEditorFailure(exception))
+        {
+            Log($"Could not create a visual macro draft: {exception.Message}");
+            PostMacroEditorError(exception.Message);
+        }
+    }
+
+    private void HandleSaveMacroDefinition(JsonElement root)
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before saving a macro.");
+            return;
+        }
+
+        try
+        {
+            SendEngineCommand("stopMacroPreview", reportFailure: false);
+            var request = JsonSerializer.Deserialize<MacroEditorSaveRequest>(
+                root.GetRawText(),
+                WebJsonOptions) ?? throw new MacroEditorException(
+                    "The macro editor sent an empty save request.");
+            var creating = string.IsNullOrWhiteSpace(request.SessionId);
+            var result = creating
+                ? _macroEditorService.Create(request)
+                : _macroEditorService.Save(request);
+            var refreshQueued = SendEngineCommand(
+                "refreshMacroCatalog",
+                new Dictionary<string, string?>
+                {
+                    ["preferredComboId"] = result.ComboId
+                },
+                reportFailure: false);
+
+            PostObjectToWeb(new
+            {
+                type = "macroEditorSaved",
+                result.ComboId,
+                result.Character,
+                result.Name,
+                result.Created,
+                result.Message,
+                refreshQueued
+            });
+            CloseMacroRecordingSession();
+        }
+        catch (Exception exception) when (IsMacroEditorFailure(exception))
+        {
+            Log($"Could not save the visual macro: {exception.Message}");
+            PostMacroEditorError(exception.Message);
+        }
+    }
+
+    private static bool TryReadWebString(
+        JsonElement root,
+        string propertyName,
+        int maximumLength,
+        out string value)
+    {
+        value = string.Empty;
+        if (!root.TryGetProperty(propertyName, out var element) ||
+            element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var raw = element.GetString() ?? string.Empty;
+        if (!LineProtocol.TryNormalizeCommandValue(raw, maximumLength, out value) ||
+            !value.Equals(raw, StringComparison.Ordinal))
+        {
+            value = string.Empty;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void OpenMacroRecordingSession(bool canEditEvents)
+    {
+        try
+        {
+            _keyboardRecordingService.SetAvailable(canEditEvents);
+        }
+        catch (InvalidOperationException exception)
+        {
+            Log($"Could not open the macro input recorder: {exception.Message}");
+            PostMacroEditorError(exception.Message);
+        }
+    }
+
+    private void CloseMacroRecordingSession()
+    {
+        _keyboardRecordingService.SetAvailable(false);
+    }
+
+    private void HandleStartMacroRecording()
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before recording input.");
+            return;
+        }
+
+        _keyboardRecordingService.Start();
+    }
+
+    private void HandleToggleMacroRecording()
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before recording input.");
+            return;
+        }
+
+        _keyboardRecordingService.Toggle();
+    }
+
+    private void HandleSetMacroRecordingSettings(JsonElement root)
+    {
+        try
+        {
+            var settings = JsonSerializer.Deserialize<MacroRecordingSettings>(
+                root.GetRawText(),
+                WebJsonOptions) ?? throw new JsonException("The recording settings are empty.");
+            _keyboardRecordingService.UpdateSettings(settings);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            PostMacroEditorError("The recording settings are invalid.");
+        }
+    }
+
+    private void OnMacroRecordingSnapshotChanged(object? sender, MacroRecordingSnapshot snapshot)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => PostMacroRecordingSnapshot(snapshot)));
+            return;
+        }
+
+        PostMacroRecordingSnapshot(snapshot);
+    }
+
+    private void PostMacroRecordingSnapshot(MacroRecordingSnapshot snapshot)
+    {
+        PostObjectToWeb(new
+        {
+            type = "macroRecordingState",
+            snapshot
+        });
+    }
+
+    private void SynchronizeMacroRecorderHotkey(IReadOnlyDictionary<string, string> state)
+    {
+        if (state.TryGetValue("recorderHotkey", out var hotkey))
+        {
+            _keyboardRecordingService.SetToggleHotkey(hotkey);
+        }
+    }
+
+    private void HandleTestMacroDefinition(JsonElement root)
+    {
+        if (_macroRunning)
+        {
+            PostMacroEditorError("Release the macro trigger before testing changes.");
+            return;
+        }
+
+        try
+        {
+            var request = JsonSerializer.Deserialize<MacroEditorSaveRequest>(
+                root.GetRawText(),
+                WebJsonOptions) ?? throw new MacroEditorException(
+                    "The macro editor sent an empty test request.");
+            var previewId = _macroEditorService.CreatePreview(request);
+            if (!SendEngineCommand(
+                    "startMacroPreview",
+                    new Dictionary<string, string?> { ["previewId"] = previewId },
+                    reportFailure: false))
+            {
+                var previewPath = Path.Combine(
+                    _rootDirectory,
+                    "bridge",
+                    "macro-previews",
+                    previewId + ".ahk");
+                try
+                {
+                    File.Delete(previewPath);
+                }
+                catch (IOException)
+                {
+                    // The temporary file will be removed by the next cleanup pass.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // The temporary file will be removed by the next cleanup pass.
+                }
+                PostMacroEditorError("The macro engine is not available for testing.");
+            }
+        }
+        catch (Exception exception) when (IsMacroEditorFailure(exception))
+        {
+            Log($"Could not test the visual macro: {exception.Message}");
+            PostMacroEditorError(exception.Message);
+        }
+    }
+
+    private void ToggleWindowMaximize()
+    {
+        if (WindowState != FormWindowState.Maximized)
+        {
+            MaximizedBounds = Screen.FromControl(this).WorkingArea;
+        }
+        WindowState = WindowState == FormWindowState.Maximized
+            ? FormWindowState.Normal
+            : FormWindowState.Maximized;
+        PostWindowState();
+    }
+
+    private void PostWindowState()
+    {
+        PostObjectToWeb(new
+        {
+            type = "windowState",
+            maximized = WindowState == FormWindowState.Maximized
+        });
+    }
+
+    private static bool IsMacroEditorFailure(Exception exception) =>
+        exception is MacroEditorException or IOException or UnauthorizedAccessException or
+        InvalidDataException or JsonException or ArgumentException or NotSupportedException;
+
+    private void PostMacroEditorError(string message)
+    {
+        PostObjectToWeb(new
+        {
+            type = "macroEditorError",
+            message
+        });
+    }
+
     private void HandleEnginePayload(string payload)
     {
         var message = LineProtocol.Parse(payload);
@@ -366,6 +764,7 @@ public sealed class MainForm : Form
 
         _engineConnected = true;
         Log($"Received optional WM_COPYDATA engine message type={type}.");
+        SynchronizeMacroRecorderHotkey(message);
         UpdateTaskbarIconFromState(message);
         PostToWeb(message);
     }
@@ -432,6 +831,17 @@ public sealed class MainForm : Form
         }
 
         var json = JsonSerializer.Serialize(message);
+        _webView.CoreWebView2.PostWebMessageAsJson(json);
+    }
+
+    private void PostObjectToWeb(object message)
+    {
+        if (!_webReady || _webView.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(message, WebJsonOptions);
         _webView.CoreWebView2.PostWebMessageAsJson(json);
     }
 
@@ -517,6 +927,7 @@ public sealed class MainForm : Form
             _macroRunning = state.TryGetValue("macroRunning", out var macroRunningText) &&
                 (macroRunningText.Equals("1", StringComparison.OrdinalIgnoreCase) ||
                  macroRunningText.Equals("true", StringComparison.OrdinalIgnoreCase));
+            SynchronizeMacroRecorderHotkey(state);
             UpdateTaskbarIconFromState(state);
             PostToWeb(state);
         }
@@ -700,11 +1111,13 @@ public sealed class MainForm : Form
                 return;
             }
 
+            var restoredWidth = Math.Max(MinimumSize.Width, placement.Width > 0 ? placement.Width : DefaultClientWidth);
+            var restoredHeight = Math.Max(MinimumSize.Height, placement.Height > 0 ? placement.Height : DefaultClientHeight);
             var requestedBounds = new Rectangle(
                 placement.X,
                 placement.Y,
-                DefaultClientWidth,
-                DefaultClientHeight);
+                restoredWidth,
+                restoredHeight);
 
             var targetScreen = Screen.AllScreens
                 .OrderByDescending(screen =>
@@ -722,8 +1135,8 @@ public sealed class MainForm : Form
             }
 
             var workingArea = targetScreen.WorkingArea;
-            var width = DefaultClientWidth;
-            var height = DefaultClientHeight;
+            var width = Math.Min(restoredWidth, workingArea.Width);
+            var height = Math.Min(restoredHeight, workingArea.Height);
             var maxX = Math.Max(
                 workingArea.Left,
                 workingArea.Right - width);
@@ -735,6 +1148,11 @@ public sealed class MainForm : Form
 
             StartPosition = FormStartPosition.Manual;
             Bounds = new Rectangle(x, y, width, height);
+            if (placement.Maximized)
+            {
+                MaximizedBounds = workingArea;
+                WindowState = FormWindowState.Maximized;
+            }
         }
         catch (Exception exception) when (
             exception is IOException ||
@@ -754,10 +1172,14 @@ public sealed class MainForm : Form
 
         try
         {
+            var savedBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             var placement = new WindowPlacement
             {
-                X = Left,
-                Y = Top
+                X = savedBounds.Left,
+                Y = savedBounds.Top,
+                Width = savedBounds.Width,
+                Height = savedBounds.Height,
+                Maximized = WindowState == FormWindowState.Maximized
             };
 
             var json = JsonSerializer.Serialize(
@@ -810,6 +1232,8 @@ public sealed class MainForm : Form
 
         _updateService.Dispose();
         _fpsUnlockService.Dispose();
+        _keyboardRecordingService.SnapshotChanged -= OnMacroRecordingSnapshotChanged;
+        _keyboardRecordingService.Dispose();
 
         var taskbarIcon = _taskbarIcon;
         _taskbarIcon = null;
@@ -1276,10 +1700,25 @@ public sealed class MainForm : Form
         }
     }
 
-    private bool CanSelfUpdate() =>
-        File.Exists(Path.Combine(_rootDirectory, "UMM.UI.exe")) &&
-        File.Exists(Path.Combine(_rootDirectory, "UMM.Engine.ahk")) &&
-        Directory.Exists(Path.Combine(_rootDirectory, "ui"));
+    private bool CanSelfUpdate()
+    {
+        var applicationDirectory = Path.GetFullPath(AppContext.BaseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var rootDirectory = Path.GetFullPath(_rootDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        // A source-tree launch uses dist\UMM.UI.exe with --root pointing at the
+        // project. Updating that mixed layout as if it were a runtime package
+        // can replace source files and restart against the wrong macro root.
+        if (!applicationDirectory.Equals(rootDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return File.Exists(Path.Combine(rootDirectory, "UMM.UI.exe")) &&
+               File.Exists(Path.Combine(rootDirectory, "UMM.Engine.ahk")) &&
+               Directory.Exists(Path.Combine(rootDirectory, "ui"));
+    }
 
     private static string FormatVersion(Version version) =>
         $"v{version.Major}.{version.Minor}.{Math.Max(0, version.Build)}";
@@ -1468,5 +1907,8 @@ public sealed class MainForm : Form
     {
         public int X { get; init; }
         public int Y { get; init; }
+        public int Width { get; init; }
+        public int Height { get; init; }
+        public bool Maximized { get; init; }
     }
 }

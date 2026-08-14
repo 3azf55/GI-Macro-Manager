@@ -49,6 +49,8 @@ internal sealed class FpsUnlockService : IDisposable
     {
         _settingsPath = Path.Combine(settingsDirectory, "fps-settings.json");
         _stubPath = Path.GetFullPath(stubPath);
+        // A missing settings file leaves _enabled at its safe first-run default
+        // of false. Once the user changes it, LoadSettings restores that choice.
         LoadSettings();
 
         if (_enabled && !File.Exists(_stubPath))
@@ -63,6 +65,7 @@ internal sealed class FpsUnlockService : IDisposable
             _status = "waiting";
             _message = "Start the game to apply the selected frame-rate target.";
         }
+        WriteIpcSettings();
 
         _monitorTask = Task.Run(MonitorAsync);
     }
@@ -515,6 +518,8 @@ internal sealed class FpsUnlockService : IDisposable
             {
                 return;
             }
+            _enabled = false;
+            WriteIpcSettings();
             _disposed = true;
             _cancellation.Cancel();
             CleanupHook();

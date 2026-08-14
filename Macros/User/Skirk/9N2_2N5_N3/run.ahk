@@ -1,10 +1,20 @@
-; Macro Manager generated runner v4
+; Macro Manager generated runner v5
 ; Original trigger detected automatically: *$j
 #NoEnv
 #NoTrayIcon
 #SingleInstance Force
 #Persistent
+#MaxThreadsPerHotkey 1
+#MaxThreadsBuffer Off
+SendMode Input
 SetBatchLines, -1
+SetMouseDelay, -1
+SetKeyDelay, -1, -1
+SetWinDelay, -1
+SetControlDelay, -1
+SetDefaultMouseSpeed, 0
+ListLines, Off
+Process, Priority,, High
 SetWorkingDir, %A_ScriptDir%
 __MM_OriginalTrigger_Skirk_9N2_2N5_N3 := "j"
 

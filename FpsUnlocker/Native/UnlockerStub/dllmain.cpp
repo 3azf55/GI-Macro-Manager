@@ -1,7 +1,6 @@
 // FPS unlock implementation adapted from PowerPaimon at commit
 // 09eddc6393714900cca0fb55bb83cb490acf09b8 (MIT License).
 #include <Windows.h>
-#include <winternl.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -14,8 +13,7 @@
 #include <vector>
 
 #pragma comment(lib, "ntdll.lib")
-#pragma comment(lib, "User32.lib")
-extern "C" NTSTATUS NTAPI LdrAddRefDll(ULONG flags, PVOID baseAddress);
+extern "C" NTSTATUS __stdcall LdrAddRefDll(ULONG flags, PVOID baseAddress);
 
 namespace
 {

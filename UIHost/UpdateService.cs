@@ -585,6 +585,42 @@ function Copy-WithRetry {
     }
 }
 
+function Copy-DirectoryContents {
+	param(
+		[string]$Source,
+		[string]$Destination
+	)
+
+	New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+	Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+		Copy-WithRetry -Source $_.FullName -Destination (Join-Path $Destination $_.Name)
+	}
+}
+
+function Remove-DirectoryContentsWithRetry {
+	param([string]$Root)
+
+	if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+		return
+	}
+
+	foreach ($item in @(Get-ChildItem -LiteralPath $Root -Force)) {
+		for ($attempt = 1; $attempt -le 20; $attempt++) {
+			try {
+				Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+				break
+			}
+			catch {
+				if ($attempt -eq 20) {
+					throw
+				}
+
+				Start-Sleep -Milliseconds 500
+			}
+		}
+	}
+}
+
 function Test-RuntimeRoot {
     param([string]$Root)
 
@@ -619,6 +655,7 @@ function Write-UpdateResult {
 $stageRoot = $null
 $rollbackRoot = $null
 $activationComplete = $false
+$activationMode = "none"
 $installRootFull = $null
 $restartSucceeded = $false
 try {
@@ -713,33 +750,66 @@ try {
         Copy-Item $registryPath $registryBackup -Force
     }
 
-    # Both directories are on the same volume. Activation consists only of
-    # directory renames; any failure restores the original name immediately.
+    # Prefer a same-volume directory swap because it is atomic. Windows can
+    # reject a root-directory rename when Explorer, a terminal, or another
+    # harmless process has that directory open. In that case, keep the root
+    # directory and replace only its contents from the already validated stage.
     Set-Location -LiteralPath $installParent
-    Move-Item -LiteralPath $installRootFull -Destination $rollbackRoot
     try {
+        Move-Item -LiteralPath $installRootFull -Destination $rollbackRoot -ErrorAction Stop
+        $activationMode = "swap"
+    }
+    catch {
+        $directorySwapError = $_.Exception.Message
+        Copy-WithRetry -Source $installRootFull -Destination $rollbackRoot
+        $activationMode = "in-place"
+    }
+
+    if ($activationMode -eq "swap") {
+      try {
         Move-Item -LiteralPath $stageRoot -Destination $installRootFull
         $activationComplete = $true
         $stageRoot = $null
+      }
+      catch {
+          Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull
+          $rollbackRoot = $null
+          throw
+      }
     }
-    catch {
-        Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull
-        $rollbackRoot = $null
-        throw
+    else {
+        Remove-DirectoryContentsWithRetry -Root $installRootFull
+        Copy-DirectoryContents -Source $stageRoot -Destination $installRootFull
+
+        if (-not (Test-RuntimeRoot -Root $installRootFull)) {
+            throw "The in-place update fallback failed runtime validation after directory swap was blocked: $directorySwapError"
+        }
+
+        $activationComplete = $true
     }
 
     Write-UpdateResult -Status "success" -Message "Macro Manager was updated successfully."
 }
 catch {
-    if (-not $activationComplete -and
-        $null -ne $rollbackRoot -and
-        (Test-Path -LiteralPath $rollbackRoot) -and
-        -not (Test-Path -LiteralPath $installRootFull)) {
-        Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull -ErrorAction SilentlyContinue
-        $rollbackRoot = $null
+    $updateErrorMessage = $_.Exception.Message
+    if (-not $activationComplete -and $null -ne $rollbackRoot -and (Test-Path -LiteralPath $rollbackRoot)) {
+        try {
+            if ($activationMode -eq "in-place") {
+                New-Item -Path $installRootFull -ItemType Directory -Force | Out-Null
+                Remove-DirectoryContentsWithRetry -Root $installRootFull
+                Copy-DirectoryContents -Source $rollbackRoot -Destination $installRootFull
+            }
+            elseif (-not (Test-Path -LiteralPath $installRootFull)) {
+                Move-Item -LiteralPath $rollbackRoot -Destination $installRootFull
+                $rollbackRoot = $null
+            }
+        }
+        catch {
+            $updateErrorMessage += " Rollback also failed: " + $_.Exception.Message
+        }
     }
 
-    Write-UpdateResult -Status "error" -Message $_.Exception.Message
+    Write-UpdateResult -Status "error" -Message $updateErrorMessage
 }
 finally {
     if (-not [string]::IsNullOrWhiteSpace($installRootFull)) {
