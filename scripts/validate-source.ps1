@@ -296,9 +296,12 @@ Assert-True (-not $indexText.Contains('Records keys, mouse buttons, and exact de
     'The recorder card copy must stay compact and its rounded overlay must auto-hide when idle.'
 Assert-True ($indexText.Contains('id="macroClearAllButton"') -and `
             $appJsText.Contains('function clearAllMacroEditorEvents()') -and `
-            -not $appJsText.Contains('window.confirm("Clear all events from this macro?")') -and `
-            $appJsText.Contains("collapsed ? 'Expand' : 'Collapse'")) `
-    'The visual editor must clear all events immediately and use Expand/Collapse for macro details.'
+            $appJsText.Contains("addEventListener('click', clearAllMacroEditorEvents)")) `
+    'The visual editor must provide a functional Clear all events action.'
+Assert-True ($indexText.Contains('id="toggleMacroDetailsButton"') -and `
+            $appJsText.Contains("shell.classList.toggle('details-collapsed')") -and `
+            $appJsText.Contains("setAttribute('aria-pressed', String(collapsed))")) `
+    'The visual editor must provide an accessible macro-details collapse control.'
 Assert-True ($indexText.Contains('id="macroTriggerCaptureButton"') -and `
             $indexText.Contains('Choose custom hotkey') -and `
             -not $indexText.Contains('Runs this macro directly') -and `
@@ -562,6 +565,7 @@ Assert-True (-not (Test-Path (Join-Path $Root '.github\workflows\discord-release
 $fpsServiceText = [System.IO.File]::ReadAllText($fpsServicePath)
 $fpsNativeText = [System.IO.File]::ReadAllText($fpsNativePath)
 $fpsProjectText = [System.IO.File]::ReadAllText($fpsProjectPath)
+$fpsBuildScriptText = [System.IO.File]::ReadAllText($fpsBuildScriptPath)
 $fpsLicenseText = [System.IO.File]::ReadAllText($fpsLicensePath)
 $noticesText = [System.IO.File]::ReadAllText($noticesPath)
 $fpsGuid = '6B78D5B5-2C60-4A7B-9F52-7F8F8B0E1750'
@@ -578,6 +582,15 @@ Assert-True ($fpsServiceText.Contains('_enabled = settings.Enabled') -and `
 Assert-True ($fpsProjectText.Contains('<PlatformToolset>v143</PlatformToolset>') -and `
             $fpsProjectText.Contains('<RuntimeLibrary>MultiThreaded</RuntimeLibrary>')) `
     'The native FPS component must remain an x64 static-runtime Visual Studio build.'
+Assert-True ($fpsNativeText.Contains('#include <winternl.h>') -and `
+            $fpsNativeText.Contains('NTSTATUS NTAPI LdrAddRefDll') -and `
+            $fpsNativeText.Contains('#pragma comment(lib, "User32.lib")')) `
+    'The native FPS component must declare LdrAddRefDll with the Windows SDK NT types and link User32.'
+Assert-True ($fpsBuildScriptText.Contains('$env:MSVC_PORTABLE_ROOT') -and `
+            $fpsBuildScriptText.Contains('setup_x64.bat') -and `
+            $fpsBuildScriptText.Contains('Import-BatchEnvironment') -and `
+            $fpsBuildScriptText.Contains('Get-Command cl.exe')) `
+    'The native build script must support the portable MSVC x64 environment and direct cl.exe builds.'
 Assert-True ($fpsLicenseText.Contains('Copyright (c) 2021-Present 34736384') -and `
             $noticesText.Contains('09eddc6393714900cca0fb55bb83cb490acf09b8')) `
     'PowerPaimon upstream copyright, license, and pinned commit notice must remain present.'
