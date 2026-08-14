@@ -13,6 +13,9 @@ SendMode Input
 SetBatchLines, -1
 SetMouseDelay, -1
 SetKeyDelay, -1, -1
+SetWinDelay, -1
+SetControlDelay, -1
+SetDefaultMouseSpeed, 0
 ListLines, Off
 Process, Priority,, High
 
@@ -194,6 +197,7 @@ ReleaseAll() {
     DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 2, "UPtr", 0)
+    SendInput, {LButton up}{RButton up}{MButton up}{Q up}{E up}{R up}{F up}{W up}{A up}{S up}{D up}{Shift up}{Space up}{1 up}{2 up}{3 up}{4 up}{5 up}
     Sleep, 5
     DllCall("mouse_event", "UInt", 0x0010, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
     DllCall("mouse_event", "UInt", 0x0004, "UInt", 0, "UInt", 0, "UInt", 0, "UPtr", 0)
@@ -204,6 +208,7 @@ ReleaseAll() {
     DllCall("keybd_event", "UChar", 0x10, "UChar", 0x2A, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x41, "UChar", 0x1E, "UInt", 2, "UPtr", 0)
     DllCall("keybd_event", "UChar", 0x44, "UChar", 0x20, "UInt", 2, "UPtr", 0)
+    SendInput, {LButton up}{RButton up}{MButton up}{Q up}{E up}{R up}{F up}{W up}{A up}{S up}{D up}{Shift up}{Space up}{1 up}{2 up}{3 up}{4 up}{5 up}
 
     LState := false
     RState := false
