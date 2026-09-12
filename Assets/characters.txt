@@ -1,0 +1,11 @@
+# Macro Manager character library
+# Format: Character name|Portrait filename|Taskbar icon filename
+# Every valid entry is displayed automatically; character management is kept
+# developer-only by editing this file. The listed portrait and icon must exist
+# under Assets\portraits and Assets\icons before adding the entry.
+
+Mavuika|Mavuika.png|Mavuika.ico
+Skirk|Skirk.png|Skirk.ico
+Arlecchino|Arlecchino.png|Arlecchino.ico
+Hu Tao|Hu Tao.png|Hu Tao.ico
+Nefer|Nefer.png|Nefer.ico

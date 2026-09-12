@@ -11,6 +11,20 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
+        // Launcher mode must run before the UI single-instance/activation gate.
+        if (args.Length == 2 && args[0].Equals("--launch-game", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                GameLaunchService.Launch(args[1]);
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(exception.Message, "Game startup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            return;
+        }
+
         var options = CommandLineOptions.Parse(args);
         var instanceKey = BuildInstanceKey(options);
         var mutexName = $@"Local\MacroManager.UI.{instanceKey}";

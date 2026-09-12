@@ -67,11 +67,12 @@ The updater:
 8. Merges the release catalog with the installed catalog.
 9. Builds and validates a complete candidate beside the live installation.
 10. Stops Macro Manager and activates the candidate with a same-volume directory swap.
-11. Restores the original directory automatically if activation fails, then restarts the engine.
+11. If Windows blocks the root-directory rename because another process has the folder open, activates the same validated candidate in place while keeping a complete rollback copy.
+12. Restores the original installation automatically if activation fails, then restarts the engine.
 
 The catalog merge keeps custom macro sections and preserves the existing `Order` value for macros included in both catalogs.
 
-The update script also keeps `settings.ini`, the `bridge` directory, and extra custom macro folders that are not present in the release package. Application files are never copied directly over the running installation.
+The update script also keeps `settings.ini`, the `bridge` directory, and extra custom macro folders that are not present in the release package. Files are replaced only after the UI and engine stop. Source-tree builds are not treated as packaged installations and cannot self-update over project files.
 
 The release workflow sends the Discord notification from the same workflow job chain after publishing. This avoids GitHub's rule that prevents a release created by `GITHUB_TOKEN` from triggering a separate `release` workflow.
 

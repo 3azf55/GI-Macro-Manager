@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>UMM.UI</AssemblyName>
     <RootNamespace>UMM.UI</RootNamespace>
-    <Version>1.7.6</Version>
+    <Version>1.7.7</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- Keep the first build framework-dependent and multi-file.
@@ -27,10 +27,30 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest"
              Condition="Exists('..\FpsUnlocker\Native\UnlockerStub\bin\x64\Release\UnlockerStub.dll')" />
+    <Content Include="..\PresentMon\PresentMon-2.5.1-x64.exe"
+             Link="Native\PresentMon\PresentMon-2.5.1-x64.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\PresentMon\LICENSE.txt"
+             Link="Native\PresentMon\LICENSE.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\PresentMon\THIRD_PARTY.txt"
+             Link="Native\PresentMon\THIRD_PARTY.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\PresentMon\README.md"
+             Link="Native\PresentMon\README.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="VerifyNativeFpsComponent" BeforeTargets="PrepareForBuild" Condition="'$(OS)' == 'Windows_NT'">
     <Error Condition="!Exists('..\FpsUnlocker\Native\UnlockerStub\bin\x64\Release\UnlockerStub.dll')"
            Text="UnlockerStub.dll is missing. Run scripts\build-fps-unlocker.ps1 before building UMM.UI." />
+    <Error Condition="!Exists('..\PresentMon\PresentMon-2.5.1-x64.exe')"
+           Text="PresentMon-2.5.1-x64.exe is missing from the PresentMon source-assets folder." />
+    <Error Condition="!Exists('..\PresentMon\LICENSE.txt') Or !Exists('..\PresentMon\THIRD_PARTY.txt') Or !Exists('..\PresentMon\README.md')"
+           Text="PresentMon license files are missing from the PresentMon source-assets folder." />
   </Target>
 </Project>

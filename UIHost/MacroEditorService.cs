@@ -44,6 +44,7 @@ internal sealed class MacroEditorService
 
     private readonly string _rootDirectory;
     private readonly string _registryPath;
+    private readonly string _characterLibraryPath;
     private readonly string _settingsPath;
     private readonly string _runtimePath;
     private readonly string _userMacroRoot;
@@ -54,6 +55,7 @@ internal sealed class MacroEditorService
     {
         _rootDirectory = Path.GetFullPath(rootDirectory);
         _registryPath = Path.Combine(_rootDirectory, "Macros", "registry.ini");
+        _characterLibraryPath = Path.Combine(_rootDirectory, "Assets", "characters.txt");
         _settingsPath = Path.Combine(_rootDirectory, "settings.ini");
         _runtimePath = Path.Combine(_rootDirectory, "Macros", "Runtime", "MacroRuntime.ahk");
         _userMacroRoot = Path.Combine(_rootDirectory, "Macros", "User");
@@ -165,12 +167,6 @@ internal sealed class MacroEditorService
         lock (_gate)
         {
             character = NormalizeRequiredField(character, 50, "Select a valid character.");
-            var registryText = ReadTextFile(_registryPath, MaximumSourceBytes);
-            var macros = ParseRegistry(registryText);
-            if (!RegistryContainsCharacter(registryText, character, macros))
-            {
-                throw new MacroEditorException("The selected character no longer exists.");
-            }
 
             return new MacroEditorDocument
             {
@@ -458,14 +454,14 @@ internal sealed class MacroEditorService
 
             var originalRegistry = ReadTextFile(_registryPath, MaximumSourceBytes);
             var macros = ParseRegistry(originalRegistry);
-            var characterMacros = macros
-                .Where(item => item.Character.Equals(character, StringComparison.Ordinal))
-                .ToList();
-            if (characterMacros.Count == 0 &&
-                !RegistryContainsCharacter(originalRegistry, character, macros))
+            var configuredCharacter = FindConfiguredCharacter(character);
+            if (configuredCharacter is null)
             {
                 throw new MacroEditorException("The selected character no longer exists.");
             }
+            var characterMacros = macros
+                .Where(item => item.Character.Equals(character, StringComparison.Ordinal))
+                .ToList();
             var tag = BuildTag(metadata.FpsTag, metadata.Testing);
             ValidateMacroTrigger(metadata.MacroTrigger, macros);
             if (characterMacros.Any(item =>
@@ -492,15 +488,7 @@ internal sealed class MacroEditorService
                 throw new MacroEditorException("The generated AHK file is too large.");
             }
 
-            var image = characterMacros.FirstOrDefault()?.Image;
-            if (string.IsNullOrWhiteSpace(image))
-            {
-                image = GetRegisteredCharacterImage(originalRegistry, character);
-            }
-            if (string.IsNullOrWhiteSpace(image))
-            {
-                image = character + ".png";
-            }
+            var image = configuredCharacter.Image;
             var order = macros.Count == 0 ? 10 : macros.Max(item => item.Order) + 10;
             var relativeSource = Path.GetRelativePath(
                     _rootDirectory,
@@ -1222,49 +1210,55 @@ internal sealed class MacroEditorService
         return result;
     }
 
-    private static bool RegistryContainsCharacter(
-        string registryText,
-        string character,
-        IReadOnlyCollection<RegistryMacro>? macros = null)
+    private ConfiguredCharacter? FindConfiguredCharacter(string character)
     {
-        if ((macros ?? ParseRegistry(registryText)).Any(item =>
-                item.Character.Equals(character, StringComparison.Ordinal)))
+        if (!File.Exists(_characterLibraryPath))
         {
-            return true;
+            return null;
         }
 
-        return EnumerateCharacterSections(registryText).Any(item =>
-            item.Name.Equals(character, StringComparison.Ordinal));
-    }
-
-    private static string GetRegisteredCharacterImage(string registryText, string character) =>
-        EnumerateCharacterSections(registryText)
-            .FirstOrDefault(item => item.Name.Equals(character, StringComparison.Ordinal))
-            ?.Image ?? string.Empty;
-
-    private static IEnumerable<RegistryCharacter> EnumerateCharacterSections(string text)
-    {
-        foreach (Match sectionMatch in Regex.Matches(
-                     text,
-                     @"(?ms)^\[(?<section>Character\.[^\]]+)\][ \t]*\r?\n(?<body>.*?)(?=^\[|\z)"))
+        var assetsDirectory = Path.GetDirectoryName(_characterLibraryPath)!;
+        var libraryText = ReadTextFile(_characterLibraryPath, 64 * 1024);
+        foreach (var rawLine in libraryText.Split('\n'))
         {
-            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match valueMatch in Regex.Matches(
-                         sectionMatch.Groups["body"].Value,
-                         @"(?m)^(?<key>[^=\r\n]+)=(?<value>.*)$"))
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith('#'))
             {
-                values[valueMatch.Groups["key"].Value.Trim()] =
-                    valueMatch.Groups["value"].Value.TrimEnd('\r').Trim();
+                continue;
             }
 
-            if (values.TryGetValue("Name", out var name) && !string.IsNullOrWhiteSpace(name))
+            var fields = line.Split('|');
+            if (fields.Length < 2)
             {
-                yield return new RegistryCharacter(
-                    name,
-                    values.GetValueOrDefault("Image") ?? string.Empty);
+                continue;
             }
+
+            var name = fields[0].Trim();
+            var image = fields[1].Trim();
+            var icon = fields.Length >= 3 ? fields[2].Trim() : string.Empty;
+            if (!name.Equals(character, StringComparison.OrdinalIgnoreCase) ||
+                !IsSafeAssetFileName(image) ||
+                !File.Exists(Path.Combine(assetsDirectory, "portraits", image)) ||
+                (icon.Length > 0 &&
+                    (!IsSafeAssetFileName(icon) ||
+                     !File.Exists(Path.Combine(assetsDirectory, "icons", icon)))))
+            {
+                continue;
+            }
+
+            return new ConfiguredCharacter(image);
         }
+
+        return null;
     }
+
+    private static bool IsSafeAssetFileName(string value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 80 &&
+        !value.Contains('/') &&
+        !value.Contains('\\') &&
+        !value.Contains("..", StringComparison.Ordinal) &&
+        value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
 
     private string ResolveUserMacroPath(string relativePath)
     {
@@ -2064,7 +2058,7 @@ internal sealed class MacroEditorService
         bool BuiltIn,
         int Order);
 
-    private sealed record RegistryCharacter(string Name, string Image);
+    private sealed record ConfiguredCharacter(string Image);
 
     private sealed record MacroMetadata(
         string Name,

@@ -2,12 +2,11 @@ const bridge = window.chrome?.webview;
 
 const communityLinks = {
   github: "https://github.com/3azf55/GI-Macro-Manager",
-  discord: "https://discord.gg/H8HNhvqqm"
+  discord: "https://discord.gg/cm3jkdkWAp"
 };
 
 const releasesUrl = "https://github.com/3azf55/GI-Macro-Manager/releases";
 
-const THEME_STORAGE_KEY = "umm-theme";
 const UPDATE_REMINDER_STORAGE_KEY = "umm-update-reminder";
 const UPDATE_REMINDER_DELAY_MS = 6 * 60 * 60 * 1000;
 
@@ -122,6 +121,8 @@ let catalogJsonCache = "";
 let macroEditorDocument = null;
 let macroEditorSaving = false;
 let macroEditorPending = false;
+let macroEditorBaseline = "";
+let macroEditorPendingExitAction = null;
 let macroEventDragId = "";
 let macroEventDragIds = [];
 let macroEventSelection = new Set();
@@ -134,6 +135,8 @@ let macroEventHistoryKey = "";
 let macroEventHistoryTime = 0;
 let macroEventAnimationFrame = 0;
 let macroDeleteTarget = null;
+let importConflictRequest = null;
+let importConflictBusy = false;
 let macroRecordingState = {
   available: false,
   recording: false,
@@ -149,7 +152,6 @@ let macroRecordingState = {
   transitions: []
 };
 let macroRecordingBaseline = null;
-let macroRecordingSettingsTimer = 0;
 
 const macroEditorKeys = [
   ["LButton", "Left mouse"], ["RButton", "Right mouse"], ["MButton", "Middle mouse"],
@@ -162,11 +164,11 @@ const macroEditorKeys = [
 
 const hotkeyCatalog = [
   { target: "Trigger", title: "Trigger", description: "Run the selected action", stateKey: "triggerKey" },
+  { target: "Recorder", title: "Recorder", description: "Start or stop recording while a macro editor is open", stateKey: "recorderHotkey" },
   { target: "ModeToggle", title: "Mode", description: "Switch application mode", stateKey: "modeToggleKey" },
   { target: "CharacterToggle", title: "Character", description: "Cycle through characters", stateKey: "characterToggleKey" },
   { target: "ComboToggle", title: "Combo", description: "Cycle the current character combos", stateKey: "comboToggleKey" },
-  { target: "Interface", title: "Interface", description: "Open Macro Manager above the game", stateKey: "interfaceKey" },
-  { target: "Recorder", title: "Recorder", description: "Start or stop recording while a macro editor is open", stateKey: "recorderHotkey" }
+  { target: "Interface", title: "Interface", description: "Open Macro Manager above the game", stateKey: "interfaceKey" }
 ];
 
 let state = {
@@ -186,12 +188,26 @@ let state = {
   interfaceKey: "F11",
   recorderHotkey: "F7",
   autoLaunchPath: "",
-  autoLaunchEnabled: true,
+  autoLaunchEnabled: false,
+  gameDllAvailable: false,
+  gameDllEnabled: false,
+  gameDllPaths: [],
+  importConflictRequestId: "",
+  importConflictName: "",
+  importConflictCharacter: "",
+  importConflictSuggestedName: "",
+  importConflictReplaceAllowed: false,
+  importConflictError: "",
   fpsEnabled: false,
   fpsTarget: 120,
   fpsStatus: "disabled",
   fpsMessage: "Enable the limiter, then start the game.",
   fpsAvailable: false,
+  fpsShowEnabled: false,
+  fpsMonitorAvailable: false,
+  fpsMonitorStatus: "disabled",
+  fpsMonitorMessage: "Enable Show FPS to display the measured frame rate.",
+  fpsCurrent: null,
   version: "—"
 };
 
@@ -326,6 +342,11 @@ function shouldShowError(message) {
 }
 
 function applyMessage(message) {
+  if (message.type === "windowCloseRequested") {
+    requestApplicationClose();
+    return;
+  }
+
   if (message.type === "macroEditorDocument") {
     macroEditorPending = false;
     openMacroEditorDocument(message.document);
@@ -368,12 +389,6 @@ function applyMessage(message) {
   if (message.type === "windowState") {
     const maximized = boolValue(message.maximized);
     document.documentElement.classList.toggle("window-maximized", maximized);
-    const button = $('[data-window-action="maximize"]');
-    if (button) {
-      button.setAttribute("aria-pressed", String(maximized));
-      button.setAttribute("aria-label", maximized ? "Restore interface" : "Maximize interface");
-      button.title = maximized ? "Restore interface" : "Maximize interface";
-    }
     return;
   }
 
@@ -405,19 +420,36 @@ function applyMessage(message) {
       macroRunning: boolValue(message.macroRunning),
       autoLaunchEnabled: boolValue(message.autoLaunchEnabled)
     };
+    syncImportConflictFromState(message);
     render();
+    return;
+  }
+
+  if (message.type === "gameDllState") {
+    state.gameDllAvailable = boolValue(message.available);
+    state.gameDllEnabled = boolValue(message.enabled);
+    state.gameDllPaths = Array.isArray(message.paths) ? message.paths.filter(path => typeof path === "string") : [];
+    renderStartup();
     return;
   }
 
   if (message.type === "fpsState") {
     const parsedTarget = Number(message.fpsTarget);
+    const parsedCurrent = Number(message.fpsCurrent);
     state = {
       ...state,
       fpsEnabled: boolValue(message.fpsEnabled),
       fpsTarget: Number.isFinite(parsedTarget) ? Math.min(420, Math.max(10, Math.round(parsedTarget))) : state.fpsTarget,
       fpsStatus: String(message.fpsStatus || "disabled"),
       fpsMessage: String(message.fpsMessage || ""),
-      fpsAvailable: boolValue(message.fpsAvailable)
+      fpsAvailable: boolValue(message.fpsAvailable),
+      fpsShowEnabled: boolValue(message.fpsShowEnabled),
+      fpsMonitorAvailable: boolValue(message.fpsMonitorAvailable),
+      fpsMonitorStatus: String(message.fpsMonitorStatus || "disabled"),
+      fpsMonitorMessage: String(message.fpsMonitorMessage || ""),
+      fpsCurrent: message.fpsCurrent !== "" && Number.isFinite(parsedCurrent)
+        ? Math.max(0, Math.round(parsedCurrent))
+        : null
     };
     renderFps();
     return;
@@ -613,16 +645,16 @@ function renderDashboard() {
   const soundStateLabel = state.soundsEnabled ? "Sound feedback enabled" : "Sound feedback muted";
   soundToggle.checked = state.soundsEnabled;
   soundToggle.setAttribute("aria-label", soundStateLabel);
+  soundControl.classList.toggle("is-enabled", state.soundsEnabled);
   soundControl.title = state.soundsEnabled ? "Mute sound feedback" : "Enable sound feedback";
   $("#modeTitle").textContent = state.appMode === "SkipDialogs" ? t("skipDialogs") : t("characterCombos");
   $("#skipBehaviorTitle").textContent = state.skipStopMode === "AnyKey" ? t("untilAnyKey") : t("untilTriggerReleased");
 
   const startGameButton = $("#startGameButton");
   const hasExecutable = Boolean(state.autoLaunchPath);
-  startGameButton.disabled = false;
-  startGameButton.title = hasExecutable
-    ? "Start the selected game"
-    : "Select the game executable and start";
+  startGameButton.classList.toggle("hidden", !hasExecutable);
+  startGameButton.disabled = !hasExecutable;
+  startGameButton.title = hasExecutable ? "Start the selected game" : "";
 
   $$("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === state.appMode));
   $$("[data-skip-mode]").forEach(button => button.classList.toggle("active", button.dataset.skipMode === state.skipStopMode));
@@ -655,6 +687,8 @@ function renderDashboard() {
   $("#quickMode").textContent = state.modeToggleKey;
   $("#quickCharacter").textContent = state.characterToggleKey;
   $("#quickCombo").textContent = state.comboToggleKey;
+  $("#quickRecorder").textContent = state.recorderHotkey;
+  $("#quickInterface").textContent = state.interfaceKey;
 }
 
 function ensureCharacterCards() {
@@ -692,6 +726,61 @@ function ensureCharacterCards() {
   });
 
   grid.dataset.initialized = "1";
+  requestAnimationFrame(updateCharacterCarousel);
+}
+
+function updateCharacterCarousel() {
+  const carousel = $("#characterCarousel");
+  const viewport = $("#characterCarouselViewport");
+  const previous = $("#previousCharactersButton");
+  const next = $("#nextCharactersButton");
+  if (!carousel || !viewport || !previous || !next) return;
+
+  const maximumScroll = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+  const hasOverflow = maximumScroll > 2;
+  const canScrollPrevious = hasOverflow && viewport.scrollLeft > 2;
+  const canScrollNext = hasOverflow && viewport.scrollLeft < maximumScroll - 2;
+  carousel.classList.toggle("has-overflow", hasOverflow);
+  carousel.classList.toggle("can-scroll-previous", canScrollPrevious);
+  carousel.classList.toggle("can-scroll-next", canScrollNext);
+  previous.disabled = !canScrollPrevious;
+  next.disabled = !canScrollNext;
+  previous.setAttribute("aria-hidden", String(!canScrollPrevious));
+  next.setAttribute("aria-hidden", String(!canScrollNext));
+}
+
+function ensureSelectedCharacterVisible() {
+  const viewport = $("#characterCarouselViewport");
+  const selectedCard = $("#characterGrid .character-card.active");
+  if (!viewport || !selectedCard) return;
+
+  const viewportRect = viewport.getBoundingClientRect();
+  const cardRect = selectedCard.getBoundingClientRect();
+  const startClearance = 4;
+  const endClearance = 4;
+  let targetScroll = viewport.scrollLeft;
+
+  if (cardRect.right > viewportRect.right - endClearance) {
+    targetScroll += cardRect.right - viewportRect.right + endClearance;
+  } else if (cardRect.left < viewportRect.left + startClearance) {
+    targetScroll -= viewportRect.left + startClearance - cardRect.left;
+  }
+
+  const maximumScroll = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+  targetScroll = Math.max(0, Math.min(maximumScroll, targetScroll));
+  if (Math.abs(targetScroll - viewport.scrollLeft) > 1) {
+    viewport.scrollTo({ left: targetScroll, behavior: "smooth" });
+  }
+}
+
+function scrollCharacterCarousel(direction) {
+  const viewport = $("#characterCarouselViewport");
+  const firstCard = $("#characterGrid .character-card");
+  if (!viewport || !firstCard) return;
+
+  const cardWidth = firstCard.getBoundingClientRect().width + 12;
+  const visibleCards = Math.max(1, Math.floor((viewport.clientWidth + 12) / cardWidth));
+  viewport.scrollBy({ left: direction * cardWidth * visibleCards, behavior: "smooth" });
 }
 
 function comboPresentation(combo) {
@@ -1060,6 +1149,11 @@ function renderCharacters() {
     button.disabled = state.macroRunning;
   });
 
+  requestAnimationFrame(() => {
+    ensureSelectedCharacterVisible();
+    updateCharacterCarousel();
+  });
+
   $("#comboPanelTitle").textContent = state.character || "No character";
   $("#comboPanelCurrent").textContent = state.comboDisplay || "No macro selected";
 
@@ -1247,6 +1341,20 @@ function renderFps() {
   $("#fpsStatus").dataset.status = status;
   $("#fpsStatusLabel").textContent = labels[status] || "FPS unlocker";
   $("#fpsStatusMessage").textContent = state.fpsMessage || "Enable the limiter, then start the game.";
+
+  const monitorToggle = $("#fpsShowToggle");
+  const monitorStatus = String(state.fpsMonitorStatus || "disabled").toLowerCase();
+  monitorToggle.checked = state.fpsShowEnabled;
+  monitorToggle.disabled = !state.fpsMonitorAvailable;
+  monitorToggle.closest(".fps-monitor-switch").title = state.fpsMonitorAvailable
+    ? (state.fpsShowEnabled ? "Hide measured FPS" : "Show measured FPS over the game")
+    : "PresentMon is not available in this build.";
+  $("#fpsMonitorRow").dataset.status = monitorStatus;
+  $("#fpsMonitorMessage").textContent = state.fpsMonitorMessage || "Enable Show FPS to display the measured frame rate.";
+  $("#fpsCurrentValue").classList.toggle("has-value", Number.isFinite(state.fpsCurrent));
+  $("#fpsCurrentValue strong").textContent = Number.isFinite(state.fpsCurrent)
+    ? String(state.fpsCurrent)
+    : "—";
 }
 
 function renderStartup() {
@@ -1265,6 +1373,41 @@ function renderStartup() {
     .classList.toggle("is-disabled", !hasExecutable);
 
   $("#clearExecutableButton").disabled = !hasExecutable;
+
+  const dllReady = state.gameDllAvailable;
+  const dllToggle = $("#gameDllsEnabledToggle");
+  dllToggle.checked = dllReady && state.gameDllEnabled;
+  dllToggle.disabled = !dllReady || state.gameDllPaths.length === 0;
+  $("#addGameDllsButton").disabled = !dllReady;
+  $("#gameDllsHelp").textContent = !dllReady
+    ? "DLL settings are unavailable."
+    : "Add or remove DLLs at any time. Select a game executable when you are ready to launch. Changes apply on the next launch.";
+  const list = $("#gameDllList");
+  list.replaceChildren();
+  if (dllReady && state.gameDllPaths.length) {
+    state.gameDllPaths.forEach(dllPath => {
+      const row = document.createElement("div");
+      row.className = "startup-dll-item";
+      const copy = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = dllPath.split(/[\\/]/).pop();
+      const detail = document.createElement("small");
+      detail.textContent = dllPath;
+      copy.append(name, detail);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary-button";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove ${name.textContent}`);
+      remove.addEventListener("click", () => post("removeGameDll", { path: dllPath }));
+      row.append(copy, remove);
+      list.append(row);
+    });
+  } else if (dllReady) {
+    const empty = document.createElement("p");
+    empty.textContent = "No DLLs added.";
+    list.append(empty);
+  }
 }
 
 
@@ -1374,27 +1517,47 @@ function normalizeTheme(value) {
   return value === "light" ? "light" : "dark";
 }
 
-function applyTheme(theme, persist = true) {
+function applyTheme(theme) {
   const selectedTheme = normalizeTheme(theme);
   document.documentElement.dataset.theme = selectedTheme;
   post("setMacroRecordingTheme", { theme: selectedTheme });
 
   const isDark = selectedTheme === "dark";
   const icon = $("#themeIcon");
-  const label = $("#themeLabel");
-  const hint = $("#themeHint");
   const toggle = $("#themeToggle");
 
   if (icon) icon.textContent = isDark ? "☾" : "☀";
-  if (label) label.textContent = isDark ? "Dark mode" : "Light mode";
-  if (hint) hint.textContent = isDark ? "Switch to light" : "Switch to dark";
   if (toggle) {
     const actionLabel = isDark ? "Switch to light mode" : "Switch to dark mode";
+    toggle.classList.toggle("is-active", isDark);
     toggle.setAttribute("aria-label", actionLabel);
     toggle.title = actionLabel;
   }
 
-  if (persist) localStorage.setItem(THEME_STORAGE_KEY, selectedTheme);
+}
+
+function getThemeTransitionOrigin() {
+  const button = $("#themeToggle");
+  const bounds = button.getBoundingClientRect();
+  const x = bounds.left + bounds.width / 2;
+  const y = bounds.top + bounds.height / 2;
+  const radius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y)
+  ) + 24;
+
+  return { x, y, radius };
+}
+
+function showThemeFallbackRipple(origin) {
+  const ripple = document.createElement("span");
+  ripple.className = "theme-transition-ripple";
+  ripple.style.setProperty("--theme-transition-x", `${origin.x}px`);
+  ripple.style.setProperty("--theme-transition-y", `${origin.y}px`);
+  ripple.style.setProperty("--theme-ripple-scale", String(Math.max(1, origin.radius)));
+  ripple.addEventListener("animationend", () => ripple.remove(), { once: true });
+  document.body.appendChild(ripple);
+  window.setTimeout(() => ripple.remove(), 700);
 }
 
 function toggleTheme() {
@@ -1404,6 +1567,7 @@ function toggleTheme() {
   const current = normalizeTheme(document.documentElement.dataset.theme);
   const nextTheme = current === "dark" ? "light" : "dark";
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const origin = getThemeTransitionOrigin();
   const commitTheme = () => applyTheme(nextTheme);
 
   if (reducedMotion) {
@@ -1418,14 +1582,31 @@ function toggleTheme() {
 
   if (typeof document.startViewTransition === "function") {
     const transition = document.startViewTransition(commitTheme);
+    transition.ready.then(() => {
+      root.animate(
+        {
+          clipPath: [
+            `circle(0 at ${origin.x}px ${origin.y}px)`,
+            `circle(${origin.radius}px at ${origin.x}px ${origin.y}px)`
+          ]
+        },
+        {
+          duration: 460,
+          easing: "linear",
+          fill: "both",
+          pseudoElement: "::view-transition-new(root)"
+        }
+      );
+    }, finishTransition);
     transition.finished.then(finishTransition, finishTransition);
     return;
   }
 
   root.classList.add("theme-transition-fallback");
+  showThemeFallbackRipple(origin);
   requestAnimationFrame(() => {
     commitTheme();
-    window.setTimeout(finishTransition, 360);
+    window.setTimeout(finishTransition, 480);
   });
 }
 
@@ -1667,9 +1848,7 @@ function openMacroEditorDocument(document) {
   const metadataOnly = !creating && !macroEditorDocument.canEditEvents;
   const shell = $("#macroEditorForm");
   shell.classList.remove("details-collapsed", "is-recording");
-  $("#toggleMacroDetailsButton").setAttribute("aria-pressed", "false");
-  $("#toggleMacroDetailsButton").textContent = "Collapse";
-  $("#toggleMacroDetailsButton").title = "Collapse macro details";
+  updateMacroDetailsToggle(false);
   shell.classList.toggle("is-metadata-only", metadataOnly);
   $("#macroEditorTitle").textContent = creating
     ? "Create macro"
@@ -1693,6 +1872,8 @@ function openMacroEditorDocument(document) {
 
   renderMacroEditorEvents();
   renderMacroRecorder();
+  macroEditorBaseline = macroEditorSnapshot();
+  hideMacroUnsavedWarning();
   $("#macroEditorModal").classList.remove("hidden");
   post("getMacroRecordingState");
   setMacroEditorSaving(false);
@@ -1703,7 +1884,8 @@ function openMacroEditorDocument(document) {
 }
 
 function closeMacroEditor(force = false) {
-  if (macroEditorSaving && !force) return;
+  if (!force) return requestMacroEditorExit();
+  if (macroEditorSaving) return false;
   if (captureTarget) endHotkeyCapture();
   window.cancelAnimationFrame(macroEventAnimationFrame);
   macroEventAnimationFrame = 0;
@@ -1716,11 +1898,86 @@ function closeMacroEditor(force = false) {
   macroEventSelectionAnchor = "";
   collapsedMacroLoops = new Set();
   macroPreviewRunning = false;
+  macroEditorBaseline = "";
   resetMacroEventHistory();
   macroRecordingBaseline = null;
+  hideMacroUnsavedWarning();
   post("stopMacroPreview");
   post("closeMacroEditorSession");
   setMacroEditorSaving(false);
+  return true;
+}
+
+function macroEditorSnapshot() {
+  if (!macroEditorDocument) return "";
+  const request = macroEditorRequest();
+  return JSON.stringify({
+    name: request.name,
+    description: request.description,
+    fpsTag: request.fpsTag,
+    testing: request.testing,
+    macroTrigger: request.macroTrigger,
+    events: request.events
+  });
+}
+
+function macroEditorHasUnsavedChanges() {
+  return Boolean(
+    macroEditorDocument?.canSave &&
+    macroEditorBaseline &&
+    macroEditorSnapshot() !== macroEditorBaseline
+  );
+}
+
+function showMacroUnsavedWarning(afterDiscard = null) {
+  const modal = $("#macroUnsavedModal");
+  if (!modal.classList.contains("hidden")) {
+    $("#keepEditingMacroButton").focus();
+    return;
+  }
+
+  macroEditorPendingExitAction = afterDiscard;
+  modal.classList.remove("hidden");
+  window.setTimeout(() => $("#keepEditingMacroButton").focus(), 0);
+}
+
+function hideMacroUnsavedWarning() {
+  $("#macroUnsavedModal").classList.add("hidden");
+  macroEditorPendingExitAction = null;
+}
+
+function keepEditingMacro() {
+  hideMacroUnsavedWarning();
+  window.setTimeout(() => $("#closeMacroEditorButton").focus(), 0);
+}
+
+function discardMacroEditorChanges() {
+  const afterDiscard = macroEditorPendingExitAction;
+  macroEditorPendingExitAction = null;
+  $("#macroUnsavedModal").classList.add("hidden");
+  if (!closeMacroEditor(true)) return;
+  if (typeof afterDiscard === "function") afterDiscard();
+}
+
+function requestMacroEditorExit(afterDiscard = null) {
+  if (macroEditorSaving) return false;
+  if (!macroEditorDocument) {
+    if (typeof afterDiscard === "function") afterDiscard();
+    return true;
+  }
+
+  if (macroEditorHasUnsavedChanges()) {
+    showMacroUnsavedWarning(afterDiscard);
+    return false;
+  }
+
+  if (!closeMacroEditor(true)) return false;
+  if (typeof afterDiscard === "function") afterDiscard();
+  return true;
+}
+
+function requestApplicationClose() {
+  requestMacroEditorExit(() => post("windowCloseConfirmed"));
 }
 
 function setMacroEditorSaving(saving) {
@@ -1955,10 +2212,11 @@ function collectMacroRecordingSettings() {
 }
 
 function queueMacroRecordingSettings() {
-  window.clearTimeout(macroRecordingSettingsTimer);
-  macroRecordingSettingsTimer = window.setTimeout(() => {
-    post("setMacroRecordingSettings", collectMacroRecordingSettings());
-  }, 120);
+  sendMacroRecordingSettingsNow();
+}
+
+function sendMacroRecordingSettingsNow() {
+  return post("setMacroRecordingSettings", collectMacroRecordingSettings());
 }
 
 function newMacroEventId() {
@@ -2174,7 +2432,7 @@ function macroEventCard(item, list, index, depth) {
   const selected = macroEventSelection.has(item.id);
   const folded = item.type === "loop" && collapsedMacroLoops.has(item.id);
   const foldControl = item.type === "loop"
-    ? `<button class="macro-event-action fold" type="button" data-event-command="fold" title="${folded ? "Expand loop" : "Fold loop"}" aria-label="${folded ? "Expand loop" : "Fold loop"}">${folded ? "›" : "⌄"}</button>`
+    ? `<button class="macro-event-action fold" type="button" data-event-command="fold" title="${folded ? "Expand loop" : "Fold loop"}" aria-label="${folded ? "Expand loop" : "Fold loop"}" aria-expanded="${!folded}"><span class="macro-fold-chevron" aria-hidden="true"></span></button>`
     : "";
   const controls = `
     <div class="macro-event-actions">
@@ -2664,6 +2922,80 @@ function openMacroDelete(combo) {
   setTimeout(() => $("#confirmMacroDeleteButton").focus(), 0);
 }
 
+function setImportConflictBusy(busy) {
+  importConflictBusy = busy;
+  $("#importConflictNameInput").disabled = busy;
+  $("#cancelImportConflictButton").disabled = busy;
+  $("#renameImportConflictButton").disabled = busy;
+  $("#replaceImportConflictButton").disabled = busy || !importConflictRequest?.replaceAllowed;
+  $("#importConflictModal").classList.toggle("is-busy", busy);
+}
+
+function closeImportConflict() {
+  $("#importConflictModal").classList.add("hidden");
+  importConflictRequest = null;
+  setImportConflictBusy(false);
+}
+
+function syncImportConflictFromState(message) {
+  const requestId = String(message.importConflictRequestId || "").trim();
+  if (!requestId) {
+    closeImportConflict();
+    return;
+  }
+
+  const sameRequest = importConflictRequest?.requestId === requestId;
+  const replaceAllowed = boolValue(message.importConflictReplaceAllowed);
+  importConflictRequest = {
+    requestId,
+    name: String(message.importConflictName || "Macro"),
+    character: String(message.importConflictCharacter || "Character"),
+    suggestedName: String(message.importConflictSuggestedName || ""),
+    replaceAllowed
+  };
+
+  $("#importConflictMacroName").textContent = importConflictRequest.name;
+  $("#importConflictCharacter").textContent = importConflictRequest.character;
+  if (!sameRequest) {
+    $("#importConflictNameInput").value = importConflictRequest.suggestedName;
+  }
+
+  const error = String(message.importConflictError || "").trim();
+  const errorElement = $("#importConflictError");
+  errorElement.textContent = error;
+  errorElement.classList.toggle("hidden", !error);
+  $("#importConflictProtected").classList.toggle("hidden", replaceAllowed);
+  $("#replaceImportConflictButton").classList.toggle("hidden", !replaceAllowed);
+
+  $("#importConflictModal").classList.remove("hidden");
+  setImportConflictBusy(false);
+  if (!sameRequest) {
+    window.setTimeout(() => $("#importConflictNameInput").focus(), 0);
+  }
+}
+
+function resolveImportConflict(decision) {
+  if (!importConflictRequest || importConflictBusy) return;
+
+  const comboName = $("#importConflictNameInput").value.trim();
+  if (decision === "rename" && !comboName) {
+    const errorElement = $("#importConflictError");
+    errorElement.textContent = "Enter a new macro name.";
+    errorElement.classList.remove("hidden");
+    $("#importConflictNameInput").focus();
+    return;
+  }
+
+  setImportConflictBusy(true);
+  if (!post("resolveImportConflict", {
+    requestId: importConflictRequest.requestId,
+    decision,
+    comboName: decision === "rename" ? comboName : ""
+  })) {
+    setImportConflictBusy(false);
+  }
+}
+
 function closeMacroDelete() {
   $("#macroDeleteModal").classList.add("hidden");
   macroDeleteTarget = null;
@@ -2706,13 +3038,25 @@ function escapeHtml(value) {
 function navigateToPage(pageName) {
   const nextPage = $(`.page[data-page-panel="${pageName}"]`);
   const currentPage = $(".page.active");
-  if (!nextPage || nextPage === currentPage) return;
+  if (!nextPage) return;
+
+  const nextNavItem = $(`.nav-item[data-page="${pageName}"]`);
+  if (nextPage === currentPage) {
+    restartNavEnclosureAnimation(nextNavItem);
+    return;
+  }
+
+  if (macroEditorDocument) {
+    requestMacroEditorExit(() => navigateToPage(pageName));
+    return;
+  }
 
   $$(".nav-item").forEach(item => {
     const selected = item.dataset.page === pageName;
     item.classList.toggle("active", selected);
     item.setAttribute("aria-current", selected ? "page" : "false");
   });
+  restartNavEnclosureAnimation(nextNavItem);
 
   currentPage?.classList.remove("active", "is-entering");
   nextPage.classList.remove("is-entering");
@@ -2727,13 +3071,36 @@ function navigateToPage(pageName) {
   requestAnimationFrame(updateAllSegmentedIndicators);
 }
 
+function restartNavEnclosureAnimation(navItem) {
+  if (!navItem) return;
+  navItem.classList.remove("nav-animate");
+  void navItem.offsetWidth;
+  navItem.classList.add("nav-animate");
+}
+
 $$('.nav-item').forEach(button => button.addEventListener('click', () => navigateToPage(button.dataset.page)));
 
 $$('[data-window-action]').forEach(button => button.addEventListener('click', () => {
-  if (button.dataset.windowAction === 'close') post('windowClose');
-  if (button.dataset.windowAction === 'minimize') post('windowMinimize');
-  if (button.dataset.windowAction === 'maximize') post('windowToggleMaximize');
+  if (button.dataset.windowAction === 'close') requestApplicationClose();
 }));
+
+function setLanguageMenuOpen(open) {
+  const button = $('#languageMenuButton');
+  const popover = $('#languageMenuPopover');
+  button.setAttribute('aria-expanded', String(open));
+  popover.classList.toggle('hidden', !open);
+}
+
+$('#languageMenuButton').addEventListener('click', () => {
+  setLanguageMenuOpen($('#languageMenuButton').getAttribute('aria-expanded') !== 'true');
+});
+$('#languageMenuPopover [data-language="en"]').addEventListener('click', () => {
+  setLanguageMenuOpen(false);
+  showToast('English is currently the only available language.');
+});
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('.title-language-menu')) setLanguageMenuOpen(false);
+});
 
 $('#titlebar').addEventListener('mousedown', event => {
   if (event.target.closest('button')) return;
@@ -2755,6 +3122,10 @@ $$('[data-skip-mode]').forEach(button => button.addEventListener('click', () => 
 }));
 $('#browseExecutableButton').addEventListener('click', () => post('browseAutoLaunch'));
 $('#clearExecutableButton').addEventListener('click', () => post('clearAutoLaunch'));
+$('#addGameDllsButton').addEventListener('click', () => post('browseGameDlls'));
+$('#gameDllsEnabledToggle').addEventListener('change', event => {
+  post('setGameDllsEnabled', { value: event.target.checked });
+});
 $('#autoLaunchToggle').addEventListener('change', event => {
   post('setAutoLaunchEnabled', { value: event.target.checked });
 });
@@ -2768,6 +3139,9 @@ $$('[data-hotkey-scope]').forEach(button => button.addEventListener('click', () 
 }));
 $('#fpsUnlockToggle').addEventListener('change', event => {
   post('setFpsUnlockEnabled', { value: event.target.checked });
+});
+$('#fpsShowToggle').addEventListener('change', event => {
+  post('setFpsOverlayEnabled', { value: event.target.checked });
 });
 $('#fpsTargetSlider').addEventListener('pointerdown', () => { fpsTargetEditing = true; });
 $('#fpsTargetSlider').addEventListener('input', event => queueFpsTarget(event.target.value));
@@ -2837,13 +3211,15 @@ $('#deleteMacroButton').addEventListener('click', () => {
     openMacroDelete(selectedCombo);
   }
 });
-$('#cancelMacroEditorButton').addEventListener('click', () => closeMacroEditor());
-$('#closeMacroEditorButton').addEventListener('click', () => closeMacroEditor());
+$('#cancelMacroEditorButton').addEventListener('click', () => requestMacroEditorExit());
+$('#closeMacroEditorButton').addEventListener('click', () => requestMacroEditorExit());
 $('#macroEditorForm').addEventListener('submit', submitMacroEditor);
 $('#previewMacroEditorButton').addEventListener('click', toggleMacroPreview);
 $('#macroEditorModal').addEventListener('mousedown', event => {
-  if (event.target === $('#macroEditorModal')) closeMacroEditor();
+  if (event.target === $('#macroEditorModal')) requestMacroEditorExit();
 });
+$('#keepEditingMacroButton').addEventListener('click', keepEditingMacro);
+$('#discardMacroChangesButton').addEventListener('click', discardMacroEditorChanges);
 $$('[data-macro-add]').forEach(button => button.addEventListener('click', () => {
   addMacroEditorEvent(button.dataset.macroAdd);
 }));
@@ -2955,12 +3331,18 @@ macroEditorEventsElement.addEventListener('dragend', () => {
   });
 });
 
+function updateMacroDetailsToggle(collapsed) {
+  const button = $('#toggleMacroDetailsButton');
+  const label = $('#macroEditorDetailsToggleLabel');
+  button.setAttribute('aria-pressed', String(collapsed));
+  button.title = collapsed ? 'Expand macro details' : 'Collapse macro details';
+  label.textContent = collapsed ? 'Expand' : 'Collapse';
+}
+
 $('#toggleMacroDetailsButton').addEventListener('click', () => {
   const shell = $('#macroEditorForm');
   const collapsed = shell.classList.toggle('details-collapsed');
-  $('#toggleMacroDetailsButton').setAttribute('aria-pressed', String(collapsed));
-  $('#toggleMacroDetailsButton').textContent = collapsed ? 'Expand' : 'Collapse';
-  $('#toggleMacroDetailsButton').title = collapsed ? 'Expand macro details' : 'Collapse macro details';
+  updateMacroDetailsToggle(collapsed);
 });
 
 $('#macroTriggerCaptureButton').addEventListener('click', beginMacroTriggerCapture);
@@ -2972,7 +3354,15 @@ $('#macroTriggerClearButton').addEventListener('click', () => {
 $('#macroClearAllButton').addEventListener('click', clearAllMacroEditorEvents);
 
 $('#macroRecorderToggleButton').addEventListener('click', () => {
-  post(macroRecordingState.recording ? 'stopMacroRecording' : 'startMacroRecording');
+  if (macroRecordingState.recording) {
+    post('stopMacroRecording');
+    return;
+  }
+
+  // Deliver the latest All/None and individual key choices before Start.
+  // WebView messages preserve order, so recording cannot begin with stale filters.
+  sendMacroRecordingSettingsNow();
+  post('startMacroRecording');
 });
 $('#macroRecorderLastWindow').addEventListener('change', event => {
   $('#macroRecorderWindowSeconds').disabled = !event.target.checked;
@@ -2995,7 +3385,24 @@ $('#macroDeleteModal').addEventListener('mousedown', event => {
   if (event.target === $('#macroDeleteModal')) closeMacroDelete();
 });
 
-window.addEventListener('resize', () => requestAnimationFrame(updateAllSegmentedIndicators));
+$('#cancelImportConflictButton').addEventListener('click', () => resolveImportConflict('cancel'));
+$('#renameImportConflictButton').addEventListener('click', () => resolveImportConflict('rename'));
+$('#replaceImportConflictButton').addEventListener('click', () => resolveImportConflict('replace'));
+$('#importConflictNameInput').addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  resolveImportConflict('rename');
+});
+
+$('#previousCharactersButton').addEventListener('click', () => scrollCharacterCarousel(-1));
+$('#nextCharactersButton').addEventListener('click', () => scrollCharacterCarousel(1));
+$('#characterCarouselViewport').addEventListener('scroll', updateCharacterCarousel, { passive: true });
+
+window.addEventListener('resize', () => requestAnimationFrame(() => {
+  updateAllSegmentedIndicators();
+  ensureSelectedCharacterVisible();
+  updateCharacterCarousel();
+}));
 window.addEventListener('pointermove', moveComboDuringReorder, { passive: false });
 window.addEventListener('pointerup', event => finishComboReorder(event, false));
 window.addEventListener('pointercancel', event => finishComboReorder(event, true));
@@ -3010,6 +3417,24 @@ window.addEventListener('blur', () => {
 });
 
 window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !$('#macroUnsavedModal').classList.contains('hidden')) {
+    event.preventDefault();
+    keepEditingMacro();
+    return;
+  }
+
+  if (event.key === 'Escape' && !$('#importConflictModal').classList.contains('hidden')) {
+    event.preventDefault();
+    resolveImportConflict('cancel');
+    return;
+  }
+
+  if (event.key === 'Escape' && $('#languageMenuButton').getAttribute('aria-expanded') === 'true') {
+    setLanguageMenuOpen(false);
+    $('#languageMenuButton').focus();
+    return;
+  }
+
   if (event.key === 'Escape' && comboPressState?.active) {
     const syntheticEvent = {
       pointerId: comboPressState.pointerId,
@@ -3052,7 +3477,7 @@ window.addEventListener('keydown', event => {
   }
 
   if (event.key === 'Escape' && !$('#macroEditorModal').classList.contains('hidden')) {
-    closeMacroEditor();
+    requestMacroEditorExit();
     return;
   }
 
@@ -3068,9 +3493,12 @@ window.addEventListener('keydown', event => {
 
 });
 
-const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-const systemPrefersLight = window.matchMedia?.('(prefers-color-scheme: light)').matches;
-applyTheme(savedTheme || (systemPrefersLight ? 'light' : 'dark'), false);
+localStorage.removeItem("umm-theme");
+const systemThemePreference = window.matchMedia("(prefers-color-scheme: light)");
+applyTheme(systemThemePreference.matches ? "light" : "dark");
+systemThemePreference.addEventListener("change", event => {
+  applyTheme(event.matches ? "light" : "dark");
+});
 
 document.documentElement.lang = "en";
 document.documentElement.dir = "ltr";

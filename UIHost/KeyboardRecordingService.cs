@@ -398,8 +398,13 @@ internal sealed class KeyboardRecordingService : IDisposable
                         {
                             return (nint)1;
                         }
-                        else if ((isDown || isUp) && !IsCurrentProcessForegroundWindow())
+                        else if (isDown || isUp)
                         {
+                            // The recorder can be started from the WebView while Macro Manager
+                            // remains foreground. Filtering by foreground process discarded every
+                            // keyboard transition in that normal workflow, while mouse input outside
+                            // the window was still captured. UI interaction is already constrained by
+                            // the selected-key filter and the recorder toggle is handled above.
                             RecordTransition(key, isDown ? "down" : "up");
                         }
                     }
@@ -493,6 +498,7 @@ internal sealed class KeyboardRecordingService : IDisposable
             0x09 => "Tab",
             0x0D => "Enter",
             0x14 => "CapsLock",
+            0x10 => "Shift",
             0x20 => "Space",
             0x21 => "PgUp", 0x22 => "PgDn", 0x23 => "End", 0x24 => "Home",
             0x25 => "Left", 0x26 => "Up", 0x27 => "Right", 0x28 => "Down",
@@ -504,7 +510,7 @@ internal sealed class KeyboardRecordingService : IDisposable
             0x6A => "NumpadMult", 0x6B => "NumpadAdd", 0x6D => "NumpadSub",
             0x6E => "NumpadDot", 0x6F => "NumpadDiv",
             >= 0x70 and <= 0x87 => $"F{virtualKeyCode - 0x6F}",
-            0xA0 => "LShift", 0xA1 => "RShift",
+            0xA0 => "Shift", 0xA1 => "Shift",
             0xA2 => "LControl", 0xA3 => "RControl",
             0xA4 => "LAlt", 0xA5 => "RAlt",
             _ => string.Empty
@@ -518,18 +524,6 @@ internal sealed class KeyboardRecordingService : IDisposable
     private static bool IsPointOverCurrentProcessWindow(Point point)
     {
         var window = WindowFromPoint(point);
-        if (window == 0)
-        {
-            return false;
-        }
-
-        GetWindowThreadProcessId(window, out var processId);
-        return processId == (uint)Environment.ProcessId;
-    }
-
-    private static bool IsCurrentProcessForegroundWindow()
-    {
-        var window = GetForegroundWindow();
         if (window == 0)
         {
             return false;
@@ -684,9 +678,6 @@ internal sealed class KeyboardRecordingService : IDisposable
     private static extern nint WindowFromPoint(Point point);
 
     [DllImport("user32.dll")]
-    private static extern nint GetForegroundWindow();
-
-    [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint windowHandle, out uint processId);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -729,10 +720,21 @@ internal sealed class RecordedInputTransition
 
 internal sealed class RecordingOverlayForm : Form
 {
-    private readonly Button _button = new();
     private readonly System.Windows.Forms.Timer _hideTimer = new() { Interval = 2800 };
+    private readonly System.Windows.Forms.Timer _animationTimer = new() { Interval = 33 };
+    private readonly ToolTip _toolTip = new()
+    {
+        InitialDelay = 420,
+        ReshowDelay = 120,
+        AutoPopDelay = 5000,
+        ShowAlways = true
+    };
     private bool _recording;
     private bool _lightTheme;
+    private bool _hovered;
+    private bool _pressed;
+    private float _animationPhase;
+    private string _hotkey = "F7";
 
     public RecordingOverlayForm()
     {
@@ -741,17 +743,11 @@ internal sealed class RecordingOverlayForm : Form
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        ClientSize = new Size(104, 38);
-        Padding = new Padding(1);
-
-        _button.Dock = DockStyle.Fill;
-        _button.FlatStyle = FlatStyle.Flat;
-        _button.FlatAppearance.BorderSize = 0;
-        _button.Cursor = Cursors.Hand;
-        _button.Font = new Font("Segoe UI Semibold", 8.25f, FontStyle.Bold);
-        _button.Margin = Padding.Empty;
-        _button.Click += (_, _) => ToggleRequested?.Invoke(this, EventArgs.Empty);
-        Controls.Add(_button);
+        ClientSize = new Size(68, 68);
+        BackColor = Color.FromArgb(18, 22, 32);
+        Cursor = Cursors.Hand;
+        DoubleBuffered = true;
+        AccessibleRole = AccessibleRole.PushButton;
 
         _hideTimer.Tick += (_, _) =>
         {
@@ -761,10 +757,16 @@ internal sealed class RecordingOverlayForm : Form
                 Hide();
             }
         };
+        _animationTimer.Tick += (_, _) =>
+        {
+            _animationPhase = (_animationPhase + (_recording ? 0.12f : 0.055f)) % (MathF.PI * 2f);
+            Invalidate();
+        };
         Shown += (_, _) => PositionOverlay();
+        VisibleChanged += (_, _) => _animationTimer.Enabled = Visible;
         SizeChanged += (_, _) => ApplyRoundedRegion();
         ApplyRoundedRegion();
-        ApplyPalette();
+        UpdateAccessibleText();
     }
 
     public event EventHandler? ToggleRequested;
@@ -786,11 +788,12 @@ internal sealed class RecordingOverlayForm : Form
     public void SetRecording(bool recording, string hotkey)
     {
         _recording = recording;
-        _button.Text = recording ? "● RECORDING" : $"● REC {hotkey}";
-        ApplyPalette();
-        _button.AccessibleName = recording ? "Stop macro recording" : "Start macro recording";
-        _button.TextAlign = ContentAlignment.MiddleCenter;
-        Text = $"Macro recorder ({hotkey})";
+        _hotkey = string.IsNullOrWhiteSpace(hotkey) ? "F7" : hotkey;
+        _animationPhase = 0;
+        UpdateBackdrop();
+        UpdateAccessibleText();
+        Text = $"Macro recorder ({_hotkey})";
+        Invalidate();
 
         if (recording)
         {
@@ -801,26 +804,175 @@ internal sealed class RecordingOverlayForm : Form
     public void SetTheme(string theme)
     {
         _lightTheme = string.Equals(theme, "light", StringComparison.Ordinal);
-        ApplyPalette();
+        UpdateBackdrop();
+        Invalidate();
     }
 
-    private void ApplyPalette()
+    private void UpdateBackdrop()
+    {
+        BackColor = _recording
+            ? (_lightTheme ? Color.FromArgb(248, 215, 222) : Color.FromArgb(46, 17, 28))
+            : (_lightTheme ? Color.FromArgb(224, 231, 246) : Color.FromArgb(18, 22, 32));
+    }
+
+    private void UpdateAccessibleText()
+    {
+        AccessibleName = _recording ? "Stop macro recording" : "Start macro recording";
+        AccessibleDescription = $"Macro recorder shortcut: {_hotkey}";
+        _toolTip.SetToolTip(this, _recording
+            ? $"Stop macro recording ({_hotkey})"
+            : $"Start macro recording ({_hotkey})");
+    }
+
+    protected override void OnPaint(PaintEventArgs eventArgs)
+    {
+        base.OnPaint(eventArgs);
+
+        var graphics = eventArgs.Graphics;
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+
+        var pulse = (MathF.Sin(_animationPhase) + 1f) / 2f;
+        var pressInset = _pressed ? 2.2f : 0f;
+        var hoverInset = _hovered ? -0.8f : 0f;
+        var idleBreath = _recording ? 0f : (pulse - .5f) * .7f;
+        var orbInset = 6f + pressInset + hoverInset - idleBreath;
+        var orbBounds = RectangleF.Inflate(ClientRectangle, -orbInset, -orbInset);
+
+        if (_recording)
+        {
+            var ringInset = 1.5f + pulse * 2.2f;
+            var ringBounds = RectangleF.Inflate(ClientRectangle, -ringInset, -ringInset);
+            using var pulseBrush = new SolidBrush(Color.FromArgb(
+                (int)(24 + pulse * 34),
+                _lightTheme ? 189 : 255,
+                _lightTheme ? 45 : 80,
+                _lightTheme ? 78 : 111));
+            graphics.FillEllipse(pulseBrush, ringBounds);
+        }
+
+        var shadowBounds = orbBounds;
+        shadowBounds.Offset(0, 2.5f);
+        using (var shadowBrush = new SolidBrush(Color.FromArgb(_lightTheme ? 34 : 82, 0, 0, 0)))
+        {
+            graphics.FillEllipse(shadowBrush, shadowBounds);
+        }
+
+        var palette = GetPalette();
+        using (var orbBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                   orbBounds,
+                   palette.Top,
+                   palette.Bottom,
+                   135f))
+        {
+            graphics.FillEllipse(orbBrush, orbBounds);
+        }
+
+        if (_hovered)
+        {
+            using var hoverBrush = new SolidBrush(Color.FromArgb(_lightTheme ? 24 : 18, Color.White));
+            graphics.FillEllipse(hoverBrush, orbBounds);
+        }
+
+        using (var borderPen = new Pen(palette.Border, _recording ? 2.2f : 1.7f))
+        {
+            graphics.DrawEllipse(borderPen, orbBounds);
+        }
+
+        DrawRecorderGlyph(graphics, orbBounds, palette.Icon, palette.Accent);
+    }
+
+    private (Color Top, Color Bottom, Color Border, Color Icon, Color Accent) GetPalette()
     {
         if (_recording)
         {
-            BackColor = _lightTheme ? Color.FromArgb(52, 170, 116) : Color.FromArgb(91, 226, 161);
-            _button.BackColor = _lightTheme ? Color.FromArgb(226, 247, 237) : Color.FromArgb(24, 105, 72);
-            _button.ForeColor = _lightTheme ? Color.FromArgb(18, 105, 69) : Color.FromArgb(235, 255, 246);
-            _button.FlatAppearance.MouseOverBackColor = _lightTheme ? Color.FromArgb(210, 241, 226) : Color.FromArgb(30, 125, 85);
-            _button.FlatAppearance.MouseDownBackColor = _lightTheme ? Color.FromArgb(194, 233, 215) : Color.FromArgb(20, 87, 60);
+            return _lightTheme
+                ? (Color.FromArgb(255, 104, 126), Color.FromArgb(183, 34, 69), Color.FromArgb(255, 214, 220), Color.White, Color.White)
+                : (Color.FromArgb(229, 63, 91), Color.FromArgb(119, 22, 52), Color.FromArgb(255, 151, 168), Color.FromArgb(255, 247, 249), Color.White);
+        }
+
+        return _lightTheme
+            ? (Color.FromArgb(255, 255, 255), Color.FromArgb(215, 225, 247), Color.FromArgb(75, 104, 199), Color.FromArgb(36, 60, 128), Color.FromArgb(205, 55, 83))
+            : (Color.FromArgb(61, 78, 125), Color.FromArgb(27, 33, 51), Color.FromArgb(147, 173, 255), Color.FromArgb(241, 245, 255), Color.FromArgb(255, 111, 132));
+    }
+
+    private void DrawRecorderGlyph(Graphics graphics, RectangleF bounds, Color iconColor, Color accentColor)
+    {
+        var center = new PointF(bounds.Left + bounds.Width / 2f, bounds.Top + bounds.Height / 2f);
+
+        if (_recording)
+        {
+            var stopBounds = new RectangleF(center.X - 6f, center.Y - 6f, 12f, 12f);
+            using var stopBrush = new SolidBrush(iconColor);
+            using var stopPath = RoundedRectangle(stopBounds, 3.2f);
+            graphics.FillPath(stopBrush, stopPath);
             return;
         }
 
-        BackColor = _lightTheme ? Color.FromArgb(183, 197, 226) : Color.FromArgb(93, 111, 159);
-        _button.BackColor = _lightTheme ? Color.FromArgb(248, 250, 253) : Color.FromArgb(31, 37, 50);
-        _button.ForeColor = _lightTheme ? Color.FromArgb(48, 63, 87) : Color.FromArgb(226, 232, 246);
-        _button.FlatAppearance.MouseOverBackColor = _lightTheme ? Color.FromArgb(235, 240, 248) : Color.FromArgb(42, 50, 67);
-        _button.FlatAppearance.MouseDownBackColor = _lightTheme ? Color.FromArgb(222, 229, 240) : Color.FromArgb(25, 30, 42);
+        var ringBounds = new RectangleF(center.X - 10.5f, center.Y - 10.5f, 21f, 21f);
+        using (var ringPen = new Pen(iconColor, 2.15f))
+        {
+            graphics.DrawEllipse(ringPen, ringBounds);
+        }
+
+        var dotBounds = new RectangleF(center.X - 4.5f, center.Y - 4.5f, 9f, 9f);
+        using var dotBrush = new SolidBrush(accentColor);
+        graphics.FillEllipse(dotBrush, dotBounds);
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath RoundedRectangle(RectangleF bounds, float radius)
+    {
+        var diameter = radius * 2f;
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    protected override void OnMouseEnter(EventArgs eventArgs)
+    {
+        base.OnMouseEnter(eventArgs);
+        _hovered = true;
+        Invalidate();
+    }
+
+    protected override void OnMouseLeave(EventArgs eventArgs)
+    {
+        base.OnMouseLeave(eventArgs);
+        _hovered = false;
+        _pressed = false;
+        Capture = false;
+        Invalidate();
+    }
+
+    protected override void OnMouseDown(MouseEventArgs eventArgs)
+    {
+        base.OnMouseDown(eventArgs);
+        if (eventArgs.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        _pressed = true;
+        Capture = true;
+        Invalidate();
+    }
+
+    protected override void OnMouseUp(MouseEventArgs eventArgs)
+    {
+        base.OnMouseUp(eventArgs);
+        var invokeToggle = _pressed && eventArgs.Button == MouseButtons.Left && ClientRectangle.Contains(eventArgs.Location);
+        _pressed = false;
+        Capture = false;
+        Invalidate();
+
+        if (invokeToggle)
+        {
+            ToggleRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public void Reveal(bool persistent)
@@ -848,7 +1000,7 @@ internal sealed class RecordingOverlayForm : Form
 
     private void ApplyRoundedRegion()
     {
-        var regionHandle = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, 18, 18);
+        var regionHandle = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, Width, Height);
         if (regionHandle == 0)
         {
             return;
@@ -866,6 +1018,8 @@ internal sealed class RecordingOverlayForm : Form
         if (disposing)
         {
             _hideTimer.Dispose();
+            _animationTimer.Dispose();
+            _toolTip.Dispose();
         }
         base.Dispose(disposing);
     }

@@ -223,20 +223,30 @@ try {
     $FinalEngine = Join-Path $Dist "UMM.Engine.ahk"
     $FinalRegistry = Join-Path $Dist "Macros\registry.ini"
     $FinalUi = Join-Path $Dist "ui\index.html"
+    $FinalCharacterLibrary = Join-Path $Dist "Assets\characters.txt"
     $FinalLicense = Join-Path $Dist "LICENSE"
     $FinalCredits = Join-Path $Dist "docs\MACRO_CREDITS.md"
     $FinalFpsStub = Join-Path $Dist "Native\UnlockerStub.dll"
     $FinalFpsLicense = Join-Path $Dist "FpsUnlocker\LICENSE-UPSTREAM.txt"
+    $FinalPresentMon = Join-Path $Dist "Native\PresentMon\PresentMon-2.5.1-x64.exe"
+    $FinalPresentMonLicense = Join-Path $Dist "Native\PresentMon\LICENSE.txt"
+    $FinalPresentMonNotices = Join-Path $Dist "Native\PresentMon\THIRD_PARTY.txt"
+    $FinalPresentMonReadme = Join-Path $Dist "Native\PresentMon\README.md"
 
     $RequiredOutputs = @(
         $FinalExe,
         $FinalEngine,
         $FinalRegistry,
         $FinalUi,
+        $FinalCharacterLibrary,
         $FinalLicense,
         $FinalCredits,
         $FinalFpsStub,
-        $FinalFpsLicense
+        $FinalFpsLicense,
+        $FinalPresentMon,
+        $FinalPresentMonLicense,
+        $FinalPresentMonNotices,
+        $FinalPresentMonReadme
     )
 
     foreach ($RequiredOutput in $RequiredOutputs) {

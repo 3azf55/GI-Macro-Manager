@@ -447,7 +447,10 @@ internal sealed class GitHubUpdateService : IDisposable
             .Where(directory =>
                 File.Exists(Path.Combine(directory, "UMM.UI.exe")) &&
                 File.Exists(Path.Combine(directory, "ui", "index.html")) &&
-                File.Exists(Path.Combine(directory, "Macros", "registry.ini")))
+                File.Exists(Path.Combine(directory, "Macros", "registry.ini")) &&
+                File.Exists(Path.Combine(directory, "Assets", "characters.txt")) &&
+                File.Exists(Path.Combine(directory, "Native", "UnlockerStub.dll")) &&
+                File.Exists(Path.Combine(directory, "Native", "PresentMon", "PresentMon-2.5.1-x64.exe")))
             .OrderBy(directory => directory.Count(character =>
                 character == Path.DirectorySeparatorChar ||
                 character == Path.AltDirectorySeparatorChar))
@@ -469,10 +472,17 @@ internal sealed class GitHubUpdateService : IDisposable
             Path.Combine(payloadRoot, "UMM.UI.exe"),
             Path.Combine(payloadRoot, "ui", "index.html"),
             Path.Combine(payloadRoot, "ui", "app.js"),
-            Path.Combine(payloadRoot, "Macros", "registry.ini")
+            Path.Combine(payloadRoot, "Macros", "registry.ini"),
+            Path.Combine(payloadRoot, "Assets", "characters.txt"),
+            Path.Combine(payloadRoot, "Native", "UnlockerStub.dll"),
+            Path.Combine(payloadRoot, "Native", "PresentMon", "PresentMon-2.5.1-x64.exe"),
+            Path.Combine(payloadRoot, "Native", "PresentMon", "LICENSE.txt"),
+            Path.Combine(payloadRoot, "Native", "PresentMon", "THIRD_PARTY.txt"),
+            Path.Combine(payloadRoot, "Native", "PresentMon", "README.md")
         };
 
-        var missing = requiredFiles.FirstOrDefault(path => !File.Exists(path));
+        var missing = requiredFiles.FirstOrDefault(path =>
+            !File.Exists(path) || new FileInfo(path).Length == 0);
         if (missing is not null)
         {
             throw new InvalidDataException(
@@ -621,14 +631,47 @@ function Remove-DirectoryContentsWithRetry {
 	}
 }
 
+function Test-RequiredFile {
+    param(
+        [string]$Root,
+        [string]$RelativePath
+    )
+
+    $path = Join-Path $Root $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $false
+    }
+
+    return (Get-Item -LiteralPath $path).Length -gt 0
+}
+
+function Test-CurrentRuntimeRoot {
+    param([string]$Root)
+
+    # The installed version may predate components introduced by this update.
+    # Require only the baseline runtime needed to perform a safe migration.
+    return (
+        (Test-RequiredFile -Root $Root -RelativePath "UMM.Engine.ahk") -and
+        (Test-RequiredFile -Root $Root -RelativePath "UMM.UI.exe") -and
+        (Test-RequiredFile -Root $Root -RelativePath "ui\index.html") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Macros\registry.ini")
+    )
+}
+
 function Test-RuntimeRoot {
     param([string]$Root)
 
     return (
-        (Test-Path -LiteralPath (Join-Path $Root "UMM.Engine.ahk") -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $Root "UMM.UI.exe") -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $Root "ui\index.html") -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $Root "Macros\registry.ini") -PathType Leaf)
+        (Test-RequiredFile -Root $Root -RelativePath "UMM.Engine.ahk") -and
+        (Test-RequiredFile -Root $Root -RelativePath "UMM.UI.exe") -and
+        (Test-RequiredFile -Root $Root -RelativePath "ui\index.html") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Macros\registry.ini") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Assets\characters.txt") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Native\UnlockerStub.dll") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Native\PresentMon\PresentMon-2.5.1-x64.exe") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Native\PresentMon\LICENSE.txt") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Native\PresentMon\THIRD_PARTY.txt") -and
+        (Test-RequiredFile -Root $Root -RelativePath "Native\PresentMon\README.md")
     )
 }
 
@@ -674,7 +717,7 @@ try {
         throw "The installation root is unsafe for an update transaction."
     }
 
-    if (-not (Test-RuntimeRoot -Root $installRootFull)) {
+    if (-not (Test-CurrentRuntimeRoot -Root $installRootFull)) {
         throw "The current installation is not a complete runtime package."
     }
 

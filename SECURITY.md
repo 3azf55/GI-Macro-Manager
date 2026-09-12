@@ -41,4 +41,4 @@ Do not post credentials, personal paths, private macros, or sensitive logs in a 
 
 When a public GitHub repository is available, use a private security advisory when possible. Otherwise, contact the maintainer through the Discord community:
 
-https://discord.gg/H8HNhvqqm
+https://discord.gg/cm3jkdkWAp

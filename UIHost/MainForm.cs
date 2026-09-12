@@ -10,6 +10,7 @@ namespace UMM.UI;
 public sealed class MainForm : Form
 {
     private const int WmNcLButtonDown = 0x00A1;
+    private const int WmPromoteInterface = 0x8001;
     private const int HtCaption = 0x0002;
 
     private const int DefaultClientWidth = 1120;
@@ -27,6 +28,10 @@ public sealed class MainForm : Form
             ["setSkipStopMode"] = CommandFields(("value", 16)),
             ["importMacro"] = CommandFields(
                 ("character", 50)),
+            ["resolveImportConflict"] = CommandFields(
+                ("requestId", 64),
+                ("decision", 16),
+                ("comboName", 60)),
             ["editMacro"] = CommandFields(
                 ("comboId", 120),
                 ("comboName", 60),
@@ -67,7 +72,9 @@ public sealed class MainForm : Form
     private readonly string _windowPlacementPath;
     private readonly string _lastUpdateCheckPath;
     private readonly GitHubUpdateService _updateService = new();
+    private readonly GameDllSettingsStore _gameDllSettings = new();
     private readonly FpsUnlockService _fpsUnlockService;
+    private readonly FpsMonitorService _fpsMonitorService;
     private readonly MacroEditorService _macroEditorService;
     private readonly KeyboardRecordingService _keyboardRecordingService;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -78,6 +85,9 @@ public sealed class MainForm : Form
     private bool _macroRunning;
     private bool _updateOperationInProgress;
     private bool _closingForUpdate;
+    private bool _allowProcessExit;
+    private bool _interfacePromotionTopMost;
+    private bool _transientTopMostRequested;
     private DateTime _lastStateWriteUtc = DateTime.MinValue;
     private DateTime _lastErrorWriteUtc = DateTime.MinValue;
     private string _lastFpsFingerprint = string.Empty;
@@ -104,6 +114,13 @@ public sealed class MainForm : Form
         _fpsUnlockService = new FpsUnlockService(
             settingsDirectory,
             Path.Combine(AppContext.BaseDirectory, "Native", "UnlockerStub.dll"));
+        _fpsMonitorService = new FpsMonitorService(
+            Path.Combine(AppContext.BaseDirectory, "Native", "PresentMon", "PresentMon-2.5.1-x64.exe"));
+        var initialFpsSettings = _fpsUnlockService.GetSnapshot();
+        if (!_fpsMonitorService.SetEnabled(initialFpsSettings.ShowFps) && initialFpsSettings.ShowFps)
+        {
+            _fpsUnlockService.SetShowFps(false);
+        }
         _macroEditorService = new MacroEditorService(_rootDirectory);
         _keyboardRecordingService = new KeyboardRecordingService(settingsDirectory);
         _keyboardRecordingService.SnapshotChanged += OnMacroRecordingSnapshotChanged;
@@ -120,7 +137,7 @@ public sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = true;
-        MinimizeBox = true;
+        MinimizeBox = false;
         SizeGripStyle = SizeGripStyle.Hide;
         ShowIcon = true;
         BackColor = Color.FromArgb(15, 17, 23);
@@ -131,9 +148,9 @@ public sealed class MainForm : Form
         RestoreWindowPlacement();
         UpdateTaskbarIcon(string.Empty);
 
-        // The AutoHotkey engine owns the only notification-area icon.
-        // Closing this form exits only the WebView2 host; the engine remains
-        // available from its original tray icon and can launch the UI again.
+        // The AutoHotkey engine owns the only notification-area icon. The UI
+        // close action hides this form so background UI-owned services such as
+        // Show FPS stay alive until the engine itself exits.
         _webView.Dock = DockStyle.Fill;
         _webView.DefaultBackgroundColor = Color.FromArgb(15, 17, 23);
         Controls.Add(_webView);
@@ -175,12 +192,20 @@ public sealed class MainForm : Form
             await InitializeWebViewAsync();
         };
         FormClosing += OnFormClosing;
+        Deactivate += (_, _) => ReleaseInterfacePromotion();
 
         Log($"UI started. Engine PID argument={_enginePid}; UI HWND={Handle}.");
     }
 
     protected override void WndProc(ref Message message)
     {
+        if (message.Msg == WmPromoteInterface)
+        {
+            BeginInvoke((Action)ActivateExistingInstance);
+            message.Result = (nint)1;
+            return;
+        }
+
         if (message.Msg == CopyDataMessageReader.WmCopyData)
         {
             var payload = CopyDataMessageReader.Read(message.LParam);
@@ -250,6 +275,7 @@ public sealed class MainForm : Form
                 BeginFileBridge();
                 PostWindowState();
                 PostFpsStateIfChanged(force: true);
+                PostGameDllState();
                 PostPreviousUpdateResult();
                 if (ShouldRunAutomaticUpdateCheck())
                 {
@@ -271,6 +297,7 @@ public sealed class MainForm : Form
                 "WebView2 Runtime required",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
+            _allowProcessExit = true;
             Close();
         }
         catch (Exception exception)
@@ -280,6 +307,7 @@ public sealed class MainForm : Form
                 "Unable to start the interface",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
+            _allowProcessExit = true;
             Close();
         }
     }
@@ -320,10 +348,10 @@ public sealed class MainForm : Form
             switch (action)
             {
                 case "windowClose":
-                    Close();
+                    HideInterfaceWindow();
                     return;
-                case "windowMinimize":
-                    WindowState = FormWindowState.Minimized;
+                case "windowCloseConfirmed":
+                    HideInterfaceWindow();
                     return;
                 case "windowToggleMaximize":
                     ToggleWindowMaximize();
@@ -333,6 +361,11 @@ public sealed class MainForm : Form
                     return;
                 case "setTransientTopMost":
                     HandleSetTransientTopMost(root);
+                    return;
+                case "browseGameDlls":
+                case "removeGameDll":
+                case "setGameDllsEnabled":
+                    HandleGameDllCommand(root, action);
                     return;
                 case "browseAutoLaunch":
                     BrowseForExecutable();
@@ -351,6 +384,9 @@ public sealed class MainForm : Form
                     return;
                 case "setFpsTarget":
                     HandleSetFpsTarget(root);
+                    return;
+                case "setFpsOverlayEnabled":
+                    HandleSetFpsOverlayEnabled(root);
                     return;
                 case "loadMacroDefinition":
                     HandleLoadMacroDefinition(root);
@@ -421,8 +457,9 @@ public sealed class MainForm : Form
             return;
         }
 
-        TopMost = activeElement.GetBoolean();
-        if (TopMost && WindowState != FormWindowState.Minimized)
+        _transientTopMostRequested = activeElement.GetBoolean();
+        TopMost = _transientTopMostRequested || _interfacePromotionTopMost;
+        if (_transientTopMostRequested && WindowState != FormWindowState.Minimized)
         {
             Show();
             BringToFront();
@@ -444,6 +481,7 @@ public sealed class MainForm : Form
         }
 
         _keyboardRecordingService.SetTheme(theme);
+        _fpsMonitorService.SetTheme(theme);
     }
 
     private void HandleLoadMacroDefinition(JsonElement root)
@@ -758,6 +796,7 @@ public sealed class MainForm : Form
         if (type.Equals("engineClosing", StringComparison.OrdinalIgnoreCase))
         {
             _engineConnected = false;
+            _allowProcessExit = true;
             Close();
             return;
         }
@@ -1212,13 +1251,65 @@ public sealed class MainForm : Form
 
         Show();
         ShowInTaskbar = true;
+        _interfacePromotionTopMost = true;
+        TopMost = true;
         BringToFront();
         Activate();
+        _ = SetForegroundWindow(Handle);
         Focus();
+    }
+
+    private void HideInterfaceWindow()
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        _windowPlacementTimer.Stop();
+        SaveWindowPlacement();
+        _interfacePromotionTopMost = false;
+        _transientTopMostRequested = false;
+        TopMost = false;
+        Hide();
+    }
+
+    private void ReleaseInterfacePromotion()
+    {
+        if (!_interfacePromotionTopMost)
+        {
+            return;
+        }
+
+        _interfacePromotionTopMost = false;
+        if (!_transientTopMostRequested)
+        {
+            TopMost = false;
+        }
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs eventArgs)
     {
+        if (eventArgs.CloseReason == CloseReason.UserClosing &&
+            !_closingForUpdate &&
+            !_allowProcessExit &&
+            IsEngineProcessAlive())
+        {
+            eventArgs.Cancel = true;
+            if (_webReady && Visible)
+            {
+                PostToWeb(new Dictionary<string, string>
+                {
+                    ["type"] = "windowCloseRequested"
+                });
+            }
+            else
+            {
+                HideInterfaceWindow();
+            }
+            return;
+        }
+
         _windowPlacementTimer.Stop();
         SaveWindowPlacement();
         _singleInstanceTimer.Stop();
@@ -1231,6 +1322,7 @@ public sealed class MainForm : Form
         }
 
         _updateService.Dispose();
+        _fpsMonitorService.Dispose();
         _fpsUnlockService.Dispose();
         _keyboardRecordingService.SnapshotChanged -= OnMacroRecordingSnapshotChanged;
         _keyboardRecordingService.Dispose();
@@ -1723,6 +1815,58 @@ public sealed class MainForm : Form
     private static string FormatVersion(Version version) =>
         $"v{version.Major}.{version.Minor}.{Math.Max(0, version.Build)}";
 
+    private void PostGameDllState()
+    {
+        try
+        {
+            var profile = _gameDllSettings.Get();
+            PostObjectToWeb(new {
+                type = "gameDllState",
+                available = true,
+                enabled = profile.Enabled,
+                paths = profile.Paths
+            });
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidDataException)
+        {
+            PostObjectToWeb(new { type = "gameDllState", available = false, enabled = false, paths = Array.Empty<string>() });
+            PostObjectToWeb(new { type = "error", message = exception.Message });
+        }
+    }
+
+    private void HandleGameDllCommand(JsonElement root, string action)
+    {
+        try
+        {
+            if (action == "browseGameDlls")
+            {
+                using var dialog = new OpenFileDialog {
+                    Title = "Add game DLLs", Filter = "DLL files (*.dll)|*.dll",
+                    CheckFileExists = true, Multiselect = true, RestoreDirectory = true
+                };
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    _gameDllSettings.Add(dialog.FileNames);
+            }
+            else if (action == "removeGameDll")
+            {
+                if (!root.TryGetProperty("path", out var path) || path.ValueKind != JsonValueKind.String)
+                    throw new InvalidOperationException("Select a DLL to remove.");
+                _gameDllSettings.Remove(path.GetString() ?? string.Empty);
+            }
+            else
+            {
+                if (!TryReadBooleanValue(root, out var enabled))
+                    throw new InvalidOperationException("The DLL setting was rejected.");
+                _gameDllSettings.SetEnabled(enabled);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException or InvalidDataException)
+        {
+            PostObjectToWeb(new { type = "error", message = exception.Message });
+        }
+        PostGameDllState();
+    }
+
     private void BrowseForExecutable()
     {
         using var dialog = new OpenFileDialog
@@ -1787,6 +1931,35 @@ public sealed class MainForm : Form
         PostFpsStateIfChanged(force: true);
     }
 
+    private void HandleSetFpsOverlayEnabled(JsonElement root)
+    {
+        if (!TryReadBooleanValue(root, out var enabled))
+        {
+            PostToWeb(new Dictionary<string, string>
+            {
+                ["type"] = "error",
+                ["message"] = "The Show FPS setting was rejected."
+            });
+            return;
+        }
+
+        if (!_fpsMonitorService.SetEnabled(enabled) && enabled)
+        {
+            _fpsUnlockService.SetShowFps(false);
+            PostToWeb(new Dictionary<string, string>
+            {
+                ["type"] = "error",
+                ["message"] = "PresentMon is missing. Build or install the complete Windows release."
+            });
+        }
+        else
+        {
+            _fpsUnlockService.SetShowFps(enabled);
+        }
+
+        PostFpsStateIfChanged(force: true);
+    }
+
     private static bool TryReadBooleanValue(JsonElement root, out bool value)
     {
         value = false;
@@ -1835,13 +2008,19 @@ public sealed class MainForm : Form
     private void PostFpsStateIfChanged(bool force = false)
     {
         var snapshot = _fpsUnlockService.GetSnapshot();
+        var monitorSnapshot = _fpsMonitorService.GetSnapshot();
         var fingerprint = string.Join(
             "\u001f",
             snapshot.Enabled,
             snapshot.Target,
             snapshot.Status,
             snapshot.Message,
-            snapshot.Available);
+            snapshot.Available,
+            monitorSnapshot.Enabled,
+            monitorSnapshot.Available,
+            monitorSnapshot.Status,
+            monitorSnapshot.Message,
+            monitorSnapshot.CurrentFps);
 
         if (!force && fingerprint.Equals(_lastFpsFingerprint, StringComparison.Ordinal))
         {
@@ -1856,7 +2035,12 @@ public sealed class MainForm : Form
             ["fpsTarget"] = snapshot.Target.ToString(),
             ["fpsStatus"] = snapshot.Status,
             ["fpsMessage"] = snapshot.Message,
-            ["fpsAvailable"] = snapshot.Available ? "1" : "0"
+            ["fpsAvailable"] = snapshot.Available ? "1" : "0",
+            ["fpsShowEnabled"] = monitorSnapshot.Enabled ? "1" : "0",
+            ["fpsMonitorAvailable"] = monitorSnapshot.Available ? "1" : "0",
+            ["fpsMonitorStatus"] = monitorSnapshot.Status,
+            ["fpsMonitorMessage"] = monitorSnapshot.Message,
+            ["fpsCurrent"] = monitorSnapshot.CurrentFps?.ToString() ?? string.Empty
         });
     }
 
@@ -1893,8 +2077,27 @@ public sealed class MainForm : Form
 
     private void BeginWindowDrag()
     {
+        var dragStart = Cursor.Position;
         ReleaseCapture();
         _ = SendMessage(Handle, WmNcLButtonDown, (nint)HtCaption, 0);
+
+        // Borderless WinForms windows do not snap consistently on every
+        // Windows build. Complete the expected title-bar gesture explicitly
+        // when the pointer is released at the top of a monitor.
+        var dragEnd = Cursor.Position;
+        var targetScreen = Screen.FromPoint(dragEnd);
+        var movedUpward = dragEnd.Y <= dragStart.Y - 4;
+        var dragDistance = Math.Abs(dragEnd.X - dragStart.X) + Math.Abs(dragEnd.Y - dragStart.Y);
+        var reachedTopEdge = dragEnd.Y <= targetScreen.Bounds.Top + 8;
+        if (WindowState != FormWindowState.Maximized &&
+            movedUpward &&
+            dragDistance >= SystemInformation.DragSize.Height &&
+            reachedTopEdge)
+        {
+            MaximizedBounds = targetScreen.WorkingArea;
+            WindowState = FormWindowState.Maximized;
+            PostWindowState();
+        }
     }
 
     [DllImport("user32.dll")]
@@ -1902,6 +2105,10 @@ public sealed class MainForm : Form
 
     [DllImport("user32.dll")]
     private static extern nint SendMessage(nint windowHandle, int message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(nint windowHandle);
 
     private sealed class WindowPlacement
     {

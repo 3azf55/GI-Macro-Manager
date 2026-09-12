@@ -88,10 +88,15 @@ jobs:
             '.\dist\ui\index.html',
             '.\dist\ui\app.js',
             '.\dist\Macros\registry.ini',
+            '.\dist\Assets\characters.txt',
             '.\dist\Assets\fonts\OFL.txt',
             '.\dist\LICENSE',
             '.\dist\docs\MACRO_CREDITS.md',
             '.\dist\Native\UnlockerStub.dll',
+            '.\dist\Native\PresentMon\PresentMon-2.5.1-x64.exe',
+            '.\dist\Native\PresentMon\LICENSE.txt',
+            '.\dist\Native\PresentMon\THIRD_PARTY.txt',
+            '.\dist\Native\PresentMon\README.md',
             '.\dist\FpsUnlocker\LICENSE-UPSTREAM.txt'
           )
           foreach ($path in $required) {

@@ -1,4 +1,4 @@
-#MaxHotkeysPerInterval 9999
+﻿#MaxHotkeysPerInterval 9999
 #HotkeyInterval 2000
 #KeyHistory 0
 #NoEnv
@@ -98,9 +98,9 @@ global SkipInterruptKeyList := ""
 global AssetsDir := ""
 global IconDir := ""
 global SoundDir := ""
-global AppVersion := "v1.7.6"
+global AppVersion := "v1.7.7"
 global AutoLaunchExePath := ""
-global AutoLaunchEnabled := true
+global AutoLaunchEnabled := false
 global WebUIHwnd := 0
 global WebUIPid := 0
 global WebUIExePath := ""
@@ -122,6 +122,9 @@ global MacroCatalog := []
 global MacroById := {}
 global CharacterCatalog := {}
 global CharacterOrder := []
+global CharacterLibrary := {}
+global CharacterLibraryOrder := []
+global PendingMacroImport := ""
 global ActiveMacroPid := 0
 global MacroPreviewPath := ""
 global MacroPreviewExecuting := false
@@ -283,6 +286,13 @@ MacroSpecificTrigger_Down:
     macroTriggerKey := MacroSpecificTrigger_KeyFromThisHotkey(A_ThisHotkey)
     macroTriggerComboId := MacroSpecificTrigger_GetComboId(macroTriggerKey)
     if (macroTriggerComboId = "")
+        return
+
+    ; A custom trigger belongs to one character. Keep the global hotkey
+    ; registered so character switching stays instant, but ignore it unless
+    ; its owner is the character currently selected by the user.
+    macroTriggerCombo := MacroCatalog_GetCombo(macroTriggerComboId)
+    if (!IsObject(macroTriggerCombo) || macroTriggerCombo.character != CurrentCharacter)
         return
 
     StopRequested := false
@@ -537,12 +547,27 @@ WebUI_FileBridgeWriteState(payload := "") {
     global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
     global CurrentCharacter, CurrentMacro
     global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
-    global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
+    global AutoLaunchExePath, AutoLaunchEnabled, AppVersion, PendingMacroImport
 
     if (!WebBridgeInitialized || WebBridgeStateFile = "")
         return false
 
     if (payload = "") {
+        importConflictRequestId := ""
+        importConflictName := ""
+        importConflictCharacter := ""
+        importConflictSuggestedName := ""
+        importConflictReplaceAllowed := 0
+        importConflictError := ""
+        if IsObject(PendingMacroImport) {
+            importConflictRequestId := PendingMacroImport.requestId
+            importConflictName := PendingMacroImport.comboName
+            importConflictCharacter := PendingMacroImport.characterName
+            importConflictSuggestedName := PendingMacroImport.suggestedName
+            importConflictReplaceAllowed := PendingMacroImport.replaceAllowed ? 1 : 0
+            importConflictError := PendingMacroImport.error
+        }
+
         enginePid := DllCall("GetCurrentProcessId", "UInt")
         payload := "type=state"
             . "`nenginePid=" . enginePid
@@ -564,6 +589,12 @@ WebUI_FileBridgeWriteState(payload := "") {
             . "`nrecorderHotkey=" . RecorderHotkey
             . "`nautoLaunchPath=" . AutoLaunchExePath
             . "`nautoLaunchEnabled=" . (AutoLaunchEnabled ? 1 : 0)
+            . "`nimportConflictRequestId=" . importConflictRequestId
+            . "`nimportConflictName=" . importConflictName
+            . "`nimportConflictCharacter=" . importConflictCharacter
+            . "`nimportConflictSuggestedName=" . importConflictSuggestedName
+            . "`nimportConflictReplaceAllowed=" . importConflictReplaceAllowed
+            . "`nimportConflictError=" . importConflictError
             . "`nversion=" . AppVersion
     }
 
@@ -614,18 +645,13 @@ WebUI_PromoteWindow(hwnd, temporarilyTopMost := false) {
 
     WinShow, ahk_id %hwnd%
     WinRestore, ahk_id %hwnd%
-    ; Clear a persistent topmost state left by an older engine build. F11 may
-    ; briefly raise the interface above a fullscreen/borderless game, but the
-    ; window must return to the normal z-order immediately afterwards.
+    ; Clear a persistent topmost state left by an older engine build. When F11
+    ; requests promotion, notify the current C# host directly. It keeps itself
+    ; above the game only while focused and clears TopMost on deactivation.
     WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
     if (temporarilyTopMost)
-        WinSet, AlwaysOnTop, On, ahk_id %hwnd%
+        PostMessage, 0x8001, 0, 0,, ahk_id %hwnd%
     WinActivate, ahk_id %hwnd%
-    if (temporarilyTopMost) {
-        Sleep, 60
-        WinSet, AlwaysOnTop, Off, ahk_id %hwnd%
-        WinActivate, ahk_id %hwnd%
-    }
     return true
 }
 
@@ -798,7 +824,7 @@ WebUI_IsSafeProtocolValue(value, maximumLength) {
 }
 
 WebUI_IsAllowedAction(action) {
-    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setSoundsEnabled|setSkipStopMode|importMacro|editMacro|deleteMacro|exportMacro|reorderMacros|refreshMacroCatalog|startMacroPreview|stopMacroPreview|setHotkey|setHotkeyScope|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
+    static allowedActions := "|uiReady|uiClosed|requestState|setCharacter|setCombo|setAppMode|setSoundsEnabled|setSkipStopMode|importMacro|resolveImportConflict|editMacro|deleteMacro|exportMacro|reorderMacros|refreshMacroCatalog|startMacroPreview|stopMacroPreview|setHotkey|setHotkeyScope|resetHotkeys|setAutoLaunchPath|setAutoLaunchEnabled|browseAutoLaunch|startGame|clearAutoLaunch|reloadEngine|exitEngine|"
     return InStr(allowedActions, "|" . action . "|", true)
 }
 
@@ -867,6 +893,14 @@ WebUI_HandleCommand(message) {
     if (action = "importMacro") {
         characterName := message.HasKey("character") ? message.character : ""
         MacroCatalog_Import(characterName)
+        return
+    }
+
+    if (action = "resolveImportConflict") {
+        requestId := message.HasKey("requestId") ? message.requestId : ""
+        decision := message.HasKey("decision") ? message.decision : ""
+        renamedName := message.HasKey("comboName") ? message.comboName : ""
+        MacroCatalog_ResolveImportConflict(requestId, decision, renamedName)
         return
     }
 
@@ -993,7 +1027,7 @@ WebUI_HandleCommand(message) {
     }
 
     if (action = "setAutoLaunchEnabled") {
-        AutoLaunchEnabled := WebUI_ToBool(value)
+        AutoLaunchEnabled := (AutoLaunchExePath != "" && FileExist(AutoLaunchExePath)) ? WebUI_ToBool(value) : false
         IniWrite, % (AutoLaunchEnabled ? 1 : 0), %ConfigFile%, Settings, AutoLaunchEnabled
         WebUI_SendState()
         return
@@ -1079,7 +1113,22 @@ WebUI_SendState() {
         global SoundsEnabled, MacroRunning, AppMode, SkipStopMode, HotkeyScope
         global CurrentCharacter, CurrentMacro
         global TriggerKey, ComboToggleKey, CharacterToggleKey, ModeToggleKey, InterfaceKey, RecorderHotkey
-        global AutoLaunchExePath, AutoLaunchEnabled, AppVersion
+        global AutoLaunchExePath, AutoLaunchEnabled, AppVersion, PendingMacroImport
+
+        importConflictRequestId := ""
+        importConflictName := ""
+        importConflictCharacter := ""
+        importConflictSuggestedName := ""
+        importConflictReplaceAllowed := 0
+        importConflictError := ""
+        if IsObject(PendingMacroImport) {
+            importConflictRequestId := PendingMacroImport.requestId
+            importConflictName := PendingMacroImport.comboName
+            importConflictCharacter := PendingMacroImport.characterName
+            importConflictSuggestedName := PendingMacroImport.suggestedName
+            importConflictReplaceAllowed := PendingMacroImport.replaceAllowed ? 1 : 0
+            importConflictError := PendingMacroImport.error
+        }
 
         payload := "type=state"
             . "`nsoundsEnabled=" . (SoundsEnabled ? 1 : 0)
@@ -1099,6 +1148,12 @@ WebUI_SendState() {
             . "`nrecorderHotkey=" . RecorderHotkey
             . "`nautoLaunchPath=" . AutoLaunchExePath
             . "`nautoLaunchEnabled=" . (AutoLaunchEnabled ? 1 : 0)
+            . "`nimportConflictRequestId=" . importConflictRequestId
+            . "`nimportConflictName=" . importConflictName
+            . "`nimportConflictCharacter=" . importConflictCharacter
+            . "`nimportConflictSuggestedName=" . importConflictSuggestedName
+            . "`nimportConflictReplaceAllowed=" . importConflictReplaceAllowed
+            . "`nimportConflictError=" . importConflictError
             . "`nversion=" . AppVersion
 
         messageResult := WebUI_SendMessage(payload)
@@ -2459,8 +2514,52 @@ MacroCatalog_UpgradeImportedRunners() {
     return upgraded
 }
 
+MacroCatalog_LoadCharacterLibrary() {
+    global AssetsDir, CharacterLibrary, CharacterLibraryOrder
+
+    CharacterLibrary := {}
+    CharacterLibraryOrder := []
+    libraryPath := AssetsDir . "\characters.txt"
+    if (!FileExist(libraryPath))
+        return false
+
+    Loop, Read, %libraryPath%
+    {
+        line := Trim(A_LoopReadLine)
+        if (line = "" || SubStr(line, 1, 1) = "#")
+            continue
+
+        fields := StrSplit(line, "|")
+        if (fields.Length() < 2)
+            continue
+
+        characterName := Trim(fields[1])
+        imageName := Trim(fields[2])
+        iconName := fields.Length() >= 3 ? Trim(fields[3]) : ""
+        if (!MacroCatalog_IsSafeField(characterName, 50)
+            || !MacroCatalog_IsSafeField(imageName, 80)
+            || InStr(imageName, "\") || InStr(imageName, "/") || InStr(imageName, ".."))
+            continue
+        if (iconName != "" && (!MacroCatalog_IsSafeField(iconName, 80)
+            || InStr(iconName, "\") || InStr(iconName, "/") || InStr(iconName, "..")))
+            continue
+        if (!FileExist(AssetsDir . "\portraits\" . imageName))
+            continue
+        if (iconName != "" && !FileExist(AssetsDir . "\icons\" . iconName))
+            continue
+        if (CharacterLibrary.HasKey(characterName))
+            continue
+
+        CharacterLibrary[characterName] := {name: characterName, image: imageName, icon: iconName}
+        CharacterLibraryOrder.Push(characterName)
+    }
+
+    return CharacterLibraryOrder.Length() > 0
+}
+
 MacroCatalog_Load() {
     global MacroRegistryFile, MacroCatalog, MacroById, CharacterCatalog, CharacterOrder
+    global CharacterLibrary, CharacterLibraryOrder
     global TriggerKey, RecorderHotkey
 
     MacroCatalog := []
@@ -2468,29 +2567,28 @@ MacroCatalog_Load() {
     CharacterCatalog := {}
     CharacterOrder := []
 
+    if (!MacroCatalog_LoadCharacterLibrary())
+        return false
+
     IniRead, sections, %MacroRegistryFile%
     if (sections = "ERROR")
         return false
 
+    ; Assets\characters.txt is the developer-owned source of truth. Every
+    ; valid entry is visible automatically, including a newly added character
+    ; that does not have any combos yet. Runtime users cannot hide or add
+    ; characters through the interface.
+    for libraryIndex, characterName in CharacterLibraryOrder {
+        libraryCharacter := CharacterLibrary[characterName]
+        CharacterCatalog[characterName] := {name: characterName, image: libraryCharacter.image, combos: []}
+        CharacterOrder.Push(characterName)
+    }
+
     Loop, Parse, sections, `n, `r
     {
         section := Trim(A_LoopField)
-        if (SubStr(section, 1, 10) = "Character.") {
-            IniRead, characterName, %MacroRegistryFile%, %section%, Name,
-            IniRead, imageName, %MacroRegistryFile%, %section%, Image,
-            characterName := Trim(characterName)
-            imageName := Trim(imageName)
-            if (characterName = "" || !MacroCatalog_IsSafeField(characterName, 50))
-                continue
-            if (imageName = "" || !MacroCatalog_IsSafeField(imageName, 80))
-                imageName := characterName . ".png"
-            if (!CharacterCatalog.HasKey(characterName)) {
-                character := {name: characterName, image: imageName, combos: []}
-                CharacterCatalog[characterName] := character
-                CharacterOrder.Push(characterName)
-            }
+        if (SubStr(section, 1, 10) = "Character.")
             continue
-        }
         if (SubStr(section, 1, 6) != "Combo.")
             continue
 
@@ -2512,6 +2610,8 @@ MacroCatalog_Load() {
         comboName := Trim(comboName)
         scriptPath := Trim(scriptPath)
         macroTrigger := Trim(macroTrigger)
+        if (!CharacterCatalog.HasKey(characterName))
+            continue
         if (macroTrigger != "" && !IsAllowedBasicHotkey(macroTrigger))
             macroTrigger := ""
         if (comboId = "" || characterName = "" || comboName = "" || scriptPath = "")
@@ -2552,8 +2652,7 @@ MacroCatalog_Load() {
             }
         }
 
-        if (imageName = "")
-            imageName := characterName . ".png"
+        imageName := CharacterCatalog[characterName].image
 
         combo := {id: comboId
             , character: characterName
@@ -2571,11 +2670,6 @@ MacroCatalog_Load() {
         MacroCatalog.Push(combo)
         MacroById[comboId] := combo
 
-        if (!CharacterCatalog.HasKey(characterName)) {
-            character := {name: characterName, image: imageName, combos: []}
-            CharacterCatalog[characterName] := character
-            CharacterOrder.Push(characterName)
-        }
         CharacterCatalog[characterName].combos.Push(combo)
     }
 
@@ -2583,22 +2677,6 @@ MacroCatalog_Load() {
     if (TriggerKey != "" && RecorderHotkey != "")
         RefreshMacroSpecificHotkeys()
     return CharacterOrder.Length() > 0
-}
-
-MacroCatalog_PreserveCharacter(characterName, imageName) {
-    global MacroRegistryFile
-
-    characterName := Trim(characterName)
-    imageName := Trim(imageName)
-    if (!MacroCatalog_IsSafeField(characterName, 50))
-        return false
-    if (imageName = "" || !MacroCatalog_IsSafeField(imageName, 80))
-        imageName := characterName . ".png"
-
-    section := "Character." . MacroCatalog_Slug(characterName)
-    IniWrite, %characterName%, %MacroRegistryFile%, %section%, Name
-    IniWrite, %imageName%, %MacroRegistryFile%, %section%, Image
-    return !ErrorLevel
 }
 
 MacroCatalog_SortCombosByOrder() {
@@ -2706,17 +2784,8 @@ MacroCatalog_NormalizeTag(tagName) {
 }
 
 MacroCatalog_ComboIdentityExists(characterName, comboName, tooltipName, tagName, excludedComboId := "") {
-    global CharacterCatalog
-    if (!CharacterCatalog.HasKey(characterName))
-        return false
-    for index, combo in CharacterCatalog[characterName].combos {
-        if (combo.id != excludedComboId
-            && combo.name = comboName
-            && combo.tooltip = tooltipName
-            && combo.tag = tagName)
-            return true
-    }
-    return false
+    existingCombo := MacroCatalog_FindComboByIdentity(characterName, comboName, tooltipName, tagName, excludedComboId)
+    return IsObject(existingCombo)
 }
 
 MacroCatalog_SanitizeDisplayField(value, maximumLength) {
@@ -2732,22 +2801,138 @@ MacroCatalog_InferNameFromFile(sourcePath) {
     return sourceName != "" ? sourceName : "Imported macro"
 }
 
-MacroCatalog_SelectUniqueName(characterName, preferredName, tooltipName, tagName) {
+MacroCatalog_FindComboByIdentity(characterName, comboName, tooltipName, tagName, excludedComboId := "") {
+    global CharacterCatalog
+
+    if (!CharacterCatalog.HasKey(characterName))
+        return ""
+
+    normalizedName := Trim(comboName)
+    normalizedTooltip := Trim(tooltipName)
+    normalizedTag := MacroCatalog_NormalizeTag(tagName)
+    StringLower, normalizedName, normalizedName
+    for comboIndex, combo in CharacterCatalog[characterName].combos {
+        if (combo.id = excludedComboId)
+            continue
+        existingName := Trim(combo.name)
+        StringLower, existingName, existingName
+        if (existingName = normalizedName
+            && Trim(combo.tooltip) = normalizedTooltip
+            && MacroCatalog_NormalizeTag(combo.tag) = normalizedTag)
+            return combo
+    }
+
+    return ""
+}
+
+MacroCatalog_SuggestUniqueName(characterName, preferredName, tooltipName, tagName) {
     preferredName := MacroCatalog_SanitizeDisplayField(preferredName, 60)
     if (preferredName = "")
         preferredName := "Imported macro"
-    if (!MacroCatalog_ComboIdentityExists(characterName, preferredName, tooltipName, tagName))
+    if (!IsObject(MacroCatalog_FindComboByIdentity(characterName, preferredName, tooltipName, tagName)))
         return preferredName
 
     Loop, 999
     {
         suffix := " (" . (A_Index + 1) . ")"
         candidate := SubStr(preferredName, 1, 60 - StrLen(suffix)) . suffix
-        if (!MacroCatalog_ComboIdentityExists(characterName, candidate, tooltipName, tagName))
+        if (!IsObject(MacroCatalog_FindComboByIdentity(characterName, candidate, tooltipName, tagName)))
             return candidate
     }
 
     return ""
+}
+
+MacroCatalog_SetImportConflictError(message) {
+    global PendingMacroImport
+
+    if !IsObject(PendingMacroImport)
+        return false
+    PendingMacroImport.error := MacroCatalog_SanitizeDisplayField(message, 160)
+    WebUI_SendState()
+    return false
+}
+
+MacroCatalog_BeginDuplicateImport(importRequest, existingCombo) {
+    global PendingMacroImport
+
+    if (!IsObject(importRequest) || !IsObject(existingCombo))
+        return false
+
+    suggestedName := MacroCatalog_SuggestUniqueName(existingCombo.character, importRequest.comboName, importRequest.tooltipName, importRequest.tagName)
+    if (suggestedName = "") {
+        WebUI_SendError("Unable to suggest a unique macro name.")
+        return false
+    }
+
+    importRequest.requestId := A_NowUTC . "-" . A_TickCount
+    importRequest.existingComboId := existingCombo.id
+    importRequest.suggestedName := suggestedName
+    importRequest.replaceAllowed := !existingCombo.builtIn
+    importRequest.error := ""
+    PendingMacroImport := importRequest
+    WebUI_SendState()
+    return true
+}
+
+MacroCatalog_ResolveImportConflict(requestId, decision, renamedName := "") {
+    global PendingMacroImport
+
+    requestId := Trim(requestId)
+    decision := Trim(decision)
+    StringLower, decision, decision
+
+    if (!IsObject(PendingMacroImport) || requestId = ""
+        || requestId != PendingMacroImport.requestId) {
+        WebUI_SendError("This import choice is no longer active. Select the AHK file again.")
+        return false
+    }
+
+    if (decision = "cancel") {
+        PendingMacroImport := ""
+        WebUI_SendState()
+        return true
+    }
+
+    if (!FileExist(PendingMacroImport.sourcePath)) {
+        PendingMacroImport := ""
+        WebUI_SendState()
+        WebUI_SendError("The selected AHK file is no longer available. Select it again.")
+        return false
+    }
+
+    if (decision = "rename") {
+        renamedName := MacroCatalog_SanitizeDisplayField(renamedName, 60)
+        if (!MacroCatalog_IsSafeField(renamedName, 60))
+            return MacroCatalog_SetImportConflictError("Enter a valid non-empty macro name.")
+        renamedDuplicate := MacroCatalog_FindComboByIdentity(PendingMacroImport.characterName, renamedName, PendingMacroImport.tooltipName, PendingMacroImport.tagName)
+        if IsObject(renamedDuplicate)
+            return MacroCatalog_SetImportConflictError("A macro with the same name, description, and tags already exists for this character.")
+
+        importRequest := PendingMacroImport
+        importRequest.comboName := renamedName
+        PendingMacroImport := ""
+        WebUI_SendState()
+        return MacroCatalog_CompleteImport(importRequest, "new")
+    }
+
+    if (decision = "replace") {
+        existingCombo := MacroCatalog_GetCombo(PendingMacroImport.existingComboId)
+        if (!IsObject(existingCombo) || existingCombo.character != PendingMacroImport.characterName
+            || existingCombo.name != PendingMacroImport.comboName
+            || existingCombo.tooltip != PendingMacroImport.tooltipName
+            || MacroCatalog_NormalizeTag(existingCombo.tag) != MacroCatalog_NormalizeTag(PendingMacroImport.tagName))
+            return MacroCatalog_SetImportConflictError("The existing macro changed. Cancel and select the file again.")
+        if (existingCombo.builtIn)
+            return MacroCatalog_SetImportConflictError("Built-in macros cannot be replaced. Change the name or cancel.")
+
+        importRequest := PendingMacroImport
+        PendingMacroImport := ""
+        WebUI_SendState()
+        return MacroCatalog_CompleteImport(importRequest, "replace", existingCombo)
+    }
+
+    return MacroCatalog_SetImportConflictError("Choose Replace, Change name, or Cancel.")
 }
 
 MacroCatalog_Slug(value) {
@@ -2821,8 +3006,156 @@ MacroCatalog_GetNextOrder() {
     return maximumOrder + 10
 }
 
+MacroCatalog_RollbackImportReplacement(originalRegistryText, macroFolder, backupFolder) {
+    global MacroRegistryFile
+
+    if InStr(FileExist(macroFolder), "D")
+        FileRemoveDir, %macroFolder%, 1
+    if InStr(FileExist(backupFolder), "D")
+        FileMoveDir, %backupFolder%, %macroFolder%, R
+    MacroCatalog_WriteAtomicText(MacroRegistryFile, originalRegistryText)
+    MacroCatalog_Load()
+}
+
+MacroCatalog_ReplaceImported(existingCombo, sourcePath, characterName, comboName, tooltipName, tagName, macroTrigger) {
+    global MacroRegistryFile, MacroRootDir, CharacterLibrary
+    global CurrentCharacter, CurrentMacro
+
+    if (!IsObject(existingCombo) || existingCombo.builtIn) {
+        WebUI_SendError("The existing macro is protected and cannot be replaced.")
+        return false
+    }
+
+    comboId := existingCombo.id
+    existingScript := MacroCatalog_ResolvePath(existingCombo.script)
+    SplitPath, existingScript, existingScriptName, macroFolder
+    macroFolder := RTrim(macroFolder, "\/")
+    if (!MacroCatalog_IsPathInsideUserRoot(macroFolder)) {
+        WebUI_SendError("The existing macro folder is outside Macros\User and cannot be replaced.")
+        return false
+    }
+
+    FileRead, originalRegistryText, %MacroRegistryFile%
+    if (ErrorLevel) {
+        WebUI_SendError("Unable to read the macro catalog before replacement.")
+        return false
+    }
+
+    stageRoot := MacroRootDir . "\User\.import-stage"
+    stageFolder := stageRoot . "\" . MacroCatalog_Slug(comboId)
+        . "_" . A_NowUTC . "_" . A_TickCount
+    FileCreateDir, %stageFolder%
+    if (ErrorLevel) {
+        WebUI_SendError("Unable to prepare the replacement macro.")
+        return false
+    }
+
+    stagedSource := stageFolder . "\source.ahk"
+    FileCopy, %sourcePath%, %stagedSource%, 1
+    if (ErrorLevel) {
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        WebUI_SendError("Unable to copy the selected AHK file.")
+        return false
+    }
+
+    stagedRunner := stageFolder . "\run.ahk"
+    executionMode := ""
+    detectedTrigger := ""
+    if (!MacroCatalog_CreateImportedRunner(stagedSource, stagedRunner, comboId, executionMode, detectedTrigger)) {
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        if (executionMode = "UnsupportedV2")
+            WebUI_SendError("AutoHotkey v2 files are not supported by this AutoHotkey v1 engine.")
+        else
+            WebUI_SendError("Unable to analyze and prepare the replacement AHK file.")
+        return false
+    }
+
+    imageName := CharacterLibrary.HasKey(characterName)
+        ? CharacterLibrary[characterName].image
+        : existingCombo.image
+    stagedManifest := stageFolder . "\manifest.ini"
+    if (!MacroCatalog_WritePackageManifest(stagedManifest, comboId, characterName, imageName, comboName, tooltipName, tagName, macroTrigger)) {
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        WebUI_SendError("Unable to prepare the replacement macro manifest.")
+        return false
+    }
+
+    trashRoot := MacroRootDir . "\User\.trash"
+    backupFolder := trashRoot . "\replace_" . MacroCatalog_Slug(comboId)
+        . "_" . A_NowUTC . "_" . A_TickCount
+    FileCreateDir, %trashRoot%
+    if (ErrorLevel) {
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        WebUI_SendError("Unable to prepare a rollback copy for the existing macro.")
+        return false
+    }
+
+    FileMoveDir, %macroFolder%, %backupFolder%, R
+    if (ErrorLevel) {
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        FileRemoveDir, %trashRoot%
+        WebUI_SendError("Unable to back up the existing macro. Close programs using its files and try again.")
+        return false
+    }
+
+    FileMoveDir, %stageFolder%, %macroFolder%, R
+    if (ErrorLevel) {
+        FileMoveDir, %backupFolder%, %macroFolder%, R
+        FileRemoveDir, %stageFolder%, 1
+        FileRemoveDir, %stageRoot%
+        FileRemoveDir, %trashRoot%
+        WebUI_SendError("Unable to activate the replacement macro. The original macro was restored.")
+        return false
+    }
+
+    replacementScript := SubStr(macroFolder . "\run.ahk", StrLen(A_ScriptDir) + 2)
+    replacement := {id: comboId
+        , character: characterName
+        , image: imageName
+        , name: comboName
+        , tooltip: tooltipName
+        , tag: tagName
+        , script: replacementScript
+        , builtIn: false
+        , order: existingCombo.order
+        , executionMode: executionMode
+        , detectedTrigger: detectedTrigger
+        , macroTrigger: macroTrigger}
+
+    if (!MacroCatalog_WriteComboSection(replacement) || !MacroCatalog_Load()) {
+        MacroCatalog_RollbackImportReplacement(originalRegistryText, macroFolder, backupFolder)
+        FileRemoveDir, %stageRoot%
+        FileRemoveDir, %trashRoot%
+        WebUI_SendError("The replacement could not be registered. The original macro was restored.")
+        return false
+    }
+
+    FileRemoveDir, %backupFolder%, 1
+    FileRemoveDir, %stageRoot%
+    FileRemoveDir, %trashRoot%
+
+    CurrentCharacter := characterName
+    CurrentMacro := comboId
+    SaveRuntimeSettings()
+    SetupTrayMenu()
+    UpdateTrayText()
+    WebUI_SendState()
+
+    replacementNotice := "Replaced " . comboName . " for " . characterName . "."
+    if (executionMode = "AutoTrigger")
+        replacementNotice .= " Detected trigger " . detectedTrigger
+            . " and its GetKeyState checks are now controlled by Macro Manager."
+    WebUI_SendNotice(replacementNotice)
+    return true
+}
+
 MacroCatalog_Import(characterName) {
-    global MacroRegistryFile, MacroRootDir, MacroById, CurrentCharacter, CurrentMacro, MacroRunning
+    global MacroRunning, PendingMacroImport
 
     if (MacroRunning) {
         WebUI_SendError("Release the trigger before importing a macro.")
@@ -2841,6 +3174,12 @@ MacroCatalog_Import(characterName) {
         return false
     }
 
+    if IsObject(PendingMacroImport) {
+        WebUI_SendError("Finish or cancel the current import choice first.")
+        WebUI_SendState()
+        return false
+    }
+
     FileSelectFile, sourcePath, 3,, Import AutoHotkey macro, AutoHotkey scripts (*.ahk)
     if (ErrorLevel || sourcePath = "")
         return false
@@ -2856,14 +3195,66 @@ MacroCatalog_Import(characterName) {
     if (tagName = "__INVALID_TAG__")
         tagName := ""
     macroTrigger := Trim(exportMetadata["macrotrigger"])
-    if (macroTrigger != "" && (!IsAllowedBasicHotkey(macroTrigger) || IsApplicationHotkeyKey(macroTrigger) || MacroSpecificTrigger_KeyInUse(macroTrigger)))
+
+    importRequest := {sourcePath: sourcePath
+        , characterName: characterName
+        , comboName: comboName
+        , tooltipName: tooltipName
+        , tagName: tagName
+        , macroTrigger: macroTrigger
+        , metadata: exportMetadata}
+
+    existingCombo := MacroCatalog_FindComboByIdentity(characterName, comboName, tooltipName, tagName)
+    if IsObject(existingCombo)
+        return MacroCatalog_BeginDuplicateImport(importRequest, existingCombo)
+
+    return MacroCatalog_CompleteImport(importRequest, "new")
+}
+
+MacroCatalog_CompleteImport(importRequest, duplicateChoice, existingCombo := "") {
+    global MacroRegistryFile, MacroRootDir, MacroById, CurrentCharacter, CurrentMacro
+    global CharacterLibrary
+
+    if !IsObject(importRequest) {
+        WebUI_SendError("The pending macro import is invalid.")
+        return false
+    }
+
+    sourcePath := importRequest.sourcePath
+    characterName := importRequest.characterName
+    comboName := importRequest.comboName
+    tooltipName := importRequest.tooltipName
+    tagName := importRequest.tagName
+    macroTrigger := importRequest.macroTrigger
+    exportMetadata := importRequest.metadata
+
+    ; Replacing a plain AHK file updates its executable content without
+    ; silently erasing catalog details that the file did not explicitly
+    ; provide. Managed export headers remain authoritative when present.
+    if (duplicateChoice = "replace" && IsObject(existingCombo)) {
+        if (!exportMetadata.HasKey("tooltip"))
+            tooltipName := existingCombo.tooltip
+        if (!exportMetadata.HasKey("tag"))
+            tagName := existingCombo.tag
+        if (!exportMetadata.HasKey("macrotrigger"))
+            macroTrigger := existingCombo.macroTrigger
+    }
+
+    replacedComboId := (duplicateChoice = "replace" && IsObject(existingCombo))
+        ? existingCombo.id
+        : ""
+    if (macroTrigger != "" && (!IsAllowedBasicHotkey(macroTrigger)
+        || IsApplicationHotkeyKey(macroTrigger)
+        || MacroSpecificTrigger_KeyInUse(macroTrigger, replacedComboId)))
         macroTrigger := ""
-    comboName := MacroCatalog_SelectUniqueName(characterName, comboName, tooltipName, tagName)
 
     if (!MacroCatalog_IsSafeField(comboName, 60)) {
         WebUI_SendError("Unable to infer a valid macro name from the selected file.")
         return false
     }
+
+    if (duplicateChoice = "replace")
+        return MacroCatalog_ReplaceImported(existingCombo, sourcePath, characterName, comboName, tooltipName, tagName, macroTrigger)
 
     characterFolder := MacroCatalog_Slug(characterName)
     characterDir := A_ScriptDir . "\Macros\User\" . characterFolder
@@ -2913,7 +3304,8 @@ MacroCatalog_Import(characterName) {
     relativeScript := relativeDir . "\run.ahk"
     IniWrite, %comboId%, %MacroRegistryFile%, %section%, Id
     IniWrite, %characterName%, %MacroRegistryFile%, %section%, Character
-    IniWrite, % characterName . ".png", %MacroRegistryFile%, %section%, Image
+    characterImage := CharacterLibrary[characterName].image
+    IniWrite, %characterImage%, %MacroRegistryFile%, %section%, Image
     IniWrite, %comboName%, %MacroRegistryFile%, %section%, Name
     IniWrite, %tooltipName%, %MacroRegistryFile%, %section%, Tooltip
     IniWrite, %tagName%, %MacroRegistryFile%, %section%, Tag
@@ -2935,7 +3327,7 @@ MacroCatalog_Import(characterName) {
     ; Keep imported folders portable. A manifest makes the registration
     ; explicit and allows safe recovery in another project tree.
     manifestPath := absoluteDir . "\manifest.ini"
-    if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, characterName . ".png", comboName, tooltipName, tagName, macroTrigger)) {
+    if (!MacroCatalog_WritePackageManifest(manifestPath, comboId, characterName, characterImage, comboName, tooltipName, tagName, macroTrigger)) {
         IniDelete, %MacroRegistryFile%, %section%
         FileRemoveDir, %absoluteDir%, 1
         WebUI_SendError("Unable to write the imported macro manifest.")
@@ -3231,15 +3623,6 @@ MacroCatalog_DeleteImported(comboId) {
 
     if (!CharacterCatalog.HasKey(combo.character)) {
         WebUI_SendError("The selected character is no longer available.")
-        return false
-    }
-
-    ; Character sections are independent from macro sections. Preserve one
-    ; before deleting the final macro so the UI card remains available for a
-    ; later import or a new visual macro.
-    isFinalCharacterMacro := CharacterCatalog[combo.character].combos.Length() <= 1
-    if (isFinalCharacterMacro && !MacroCatalog_PreserveCharacter(combo.character, combo.image)) {
-        WebUI_SendError("Unable to preserve the character card. The macro was not deleted.")
         return false
     }
 
@@ -3679,7 +4062,14 @@ LoadRuntimeSettings() {
     IniRead, SavedSounds, %ConfigFile%, Settings, SoundsEnabled, 1
     IniRead, SavedHotkeyScope, %ConfigFile%, Settings, HotkeyScope, GameOnly
     IniRead, SavedAutoLaunchExe, %ConfigFile%, Settings, AutoLaunchExe,
-    IniRead, SavedAutoLaunchEnabled, %ConfigFile%, Settings, AutoLaunchEnabled, 1
+    IniRead, SavedAutoLaunchEnabled, %ConfigFile%, Settings, AutoLaunchEnabled, 0
+    ; Reset the old implicit ON default once; later explicit choices persist.
+    IniRead, AutoLaunchOptInVersion, %ConfigFile%, Settings, AutoLaunchOptInVersion, 0
+    if (AutoLaunchOptInVersion != 1) {
+        SavedAutoLaunchEnabled := 0
+        IniWrite, 0, %ConfigFile%, Settings, AutoLaunchEnabled
+        IniWrite, 1, %ConfigFile%, Settings, AutoLaunchOptInVersion
+    }
 
     ; v1.7.5 removed the global macro ON/OFF state. Clean up the obsolete key
     ; while preserving all current character, combo, and preference values.
@@ -3826,7 +4216,14 @@ RunAutoLaunchApp(reportErrors := false) {
         }
     }
 
-    runTarget := """" . AutoLaunchExePath . """"
+    ; The short-lived host launcher applies Startup DLL settings for both
+    ; manual and automatic starts, even before the main UI is ready.
+    launcherPath := ResolveWebUIExePath()
+    if (launcherPath = "") {
+        WebUI_SendError("Build the UI host before starting the game.")
+        return false
+    }
+    runTarget := """" . launcherPath . """ --launch-game """ . AutoLaunchExePath . """"
     Run, %runTarget%, %exeDir%, UseErrorLevel
     if (ErrorLevel) {
         if (reportErrors)
@@ -4790,7 +5187,11 @@ UpdateTrayText() {
             Menu, ModeMenu, Uncheck, %comboLabel%
         }
         currentComboLabel := GetComboMenuLabel(CurrentMacro)
-        Menu, ModeMenu, Check, %currentComboLabel%
+        ; A newly enabled character can legitimately have no macros yet. AutoHotkey's
+        ; Menu command rejects a blank item name, so leave the menu unchecked until
+        ; the first combo is created or imported for that character.
+        if (currentComboLabel != "")
+            Menu, ModeMenu, Check, %currentComboLabel%
     }
 
     for index, characterName in CharacterOrder

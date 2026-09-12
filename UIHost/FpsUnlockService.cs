@@ -14,7 +14,8 @@ internal sealed record FpsUnlockSnapshot(
     int Target,
     string Status,
     string Message,
-    bool Available);
+    bool Available,
+    bool ShowFps);
 
 internal sealed class FpsUnlockService : IDisposable
 {
@@ -40,6 +41,7 @@ internal sealed class FpsUnlockService : IDisposable
     private DateTime _connectionStartedUtc;
     private bool _retryBlocked;
     private bool _enabled;
+    private bool _showFps;
     private int _target = 120;
     private string _status = "disabled";
     private string _message = "Enable the limiter, then start the game.";
@@ -79,7 +81,8 @@ internal sealed class FpsUnlockService : IDisposable
                 _target,
                 _status,
                 _message,
-                File.Exists(_stubPath));
+                File.Exists(_stubPath),
+                _showFps);
         }
     }
 
@@ -132,6 +135,15 @@ internal sealed class FpsUnlockService : IDisposable
             {
                 _message = $"The game is limited to {_target} FPS.";
             }
+            SaveSettings();
+        }
+    }
+
+    public void SetShowFps(bool showFps)
+    {
+        lock (_gate)
+        {
+            _showFps = showFps;
             SaveSettings();
         }
     }
@@ -484,12 +496,14 @@ internal sealed class FpsUnlockService : IDisposable
 
             _enabled = settings.Enabled;
             _target = Math.Clamp(settings.Target, 10, 420);
+            _showFps = settings.ShowFps;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException)
         {
             _enabled = false;
             _target = 120;
+            _showFps = false;
         }
     }
 
@@ -498,7 +512,7 @@ internal sealed class FpsUnlockService : IDisposable
         try
         {
             var json = JsonSerializer.Serialize(
-                new FpsSettings { Enabled = _enabled, Target = _target },
+                new FpsSettings { Enabled = _enabled, Target = _target, ShowFps = _showFps },
                 new JsonSerializerOptions { WriteIndented = true });
             var temporaryPath = _settingsPath + ".tmp";
             File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
@@ -546,6 +560,7 @@ internal sealed class FpsUnlockService : IDisposable
 
         public bool Enabled { get; set; }
         public int Target { get; set; } = 120;
+        public bool ShowFps { get; set; }
     }
 
     private delegate bool EnumWindowsCallback(nint window, nint parameter);

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Macro Manager</title>
-  <link rel="stylesheet" href="styles.css?v=1.7.6-ui-refresh-1" />
+  <link rel="stylesheet" href="styles.css?v=1.7.7-ui-refresh-12" />
 </head>
 <body class="app-starting">
   <div class="app-shell">
@@ -16,13 +16,20 @@
         </div>
       </div>
       <div class="titlebar-actions">
-        <span class="title-language-toggle is-static" aria-label="Interface language: English" title="English">
-          <span class="title-language-icon" aria-hidden="true">文</span>
-          <span class="title-language-code">EN</span>
-        </span>
+        <div class="title-language-menu">
+          <button class="title-language-toggle" id="languageMenuButton" type="button" aria-label="Interface language: English" aria-expanded="false" aria-controls="languageMenuPopover" title="Language">
+            <svg class="title-language-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+            </svg>
+          </button>
+          <div class="title-language-popover hidden" id="languageMenuPopover" role="menu" aria-label="Interface language">
+            <button type="button" role="menuitemradio" aria-checked="true" data-language="en">
+              <span>English</span><strong>EN</strong><span class="language-check" aria-hidden="true">✓</span>
+            </button>
+          </div>
+        </div>
         <div class="window-controls" aria-label="Window controls">
-          <button class="window-button minimize" data-window-action="minimize" aria-label="Minimize interface" title="Minimize interface"><span class="window-glyph" aria-hidden="true"></span></button>
-          <button class="window-button maximize" data-window-action="maximize" aria-label="Maximize interface" title="Maximize interface" aria-pressed="false"><span class="window-glyph" aria-hidden="true"></span></button>
           <button class="window-button close" data-window-action="close" aria-label="Close interface" title="Close interface"><span class="window-glyph" aria-hidden="true"></span></button>
         </div>
       </div>
@@ -30,7 +37,7 @@
 
     <aside class="sidebar" aria-label="Application navigation">
       <nav class="nav-list" aria-label="Main navigation">
-        <button class="nav-item active" data-page="dashboard" aria-current="page">
+        <button class="nav-item active nav-animate" data-page="dashboard" aria-current="page">
           <span class="nav-icon">⌂</span><span class="preserve-ltr">Dashboard</span>
         </button>
         <button class="nav-item" data-page="characters">
@@ -73,7 +80,7 @@
         <div class="page-heading">
           <div><span class="eyebrow" data-i18n="controlCenter">CONTROL CENTER</span><h1 data-i18n="dashboardTitle">Dashboard</h1></div>
           <div class="page-heading-actions">
-            <button id="startGameButton" class="secondary-button dashboard-start-button" type="button">Start game</button>
+            <button id="startGameButton" class="secondary-button dashboard-start-button hidden" type="button">Start game</button>
           </div>
         </div>
 
@@ -99,9 +106,11 @@
                   <span class="eyebrow" id="quickControlsLabel" data-i18n="quickControls">QUICK CONTROLS</span>
                   <div class="quick-hotkeys">
                     <div><span>Trigger</span><strong id="quickTrigger">—</strong></div>
+                    <div><span>Recorder</span><strong id="quickRecorder">—</strong></div>
                     <div><span>Mode</span><strong id="quickMode">—</strong></div>
                     <div><span>Character</span><strong id="quickCharacter">—</strong></div>
                     <div><span>Combo</span><strong id="quickCombo">—</strong></div>
+                    <div><span>Interface</span><strong id="quickInterface">—</strong></div>
                   </div>
                 </section>
               </div>
@@ -140,7 +149,17 @@
         <div class="page-heading">
           <div><span class="eyebrow" data-i18n="characterLibrary">CHARACTER LIBRARY</span><h1 data-i18n="charactersTitle">Characters &amp; Combos</h1></div>
         </div>
-        <div id="characterGrid" class="character-grid"></div>
+        <div class="character-carousel" id="characterCarousel">
+          <button class="character-carousel-button previous" id="previousCharactersButton" type="button" aria-label="Show previous characters" title="Previous characters">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg>
+          </button>
+          <div class="character-carousel-viewport" id="characterCarouselViewport">
+            <div id="characterGrid" class="character-grid"></div>
+          </div>
+          <button class="character-carousel-button next" id="nextCharactersButton" type="button" aria-label="Show next characters" title="Next characters">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6" /></svg>
+          </button>
+        </div>
         <article class="surface-card combo-panel">
           <div class="combo-panel-heading">
             <div><span class="eyebrow" data-i18n="activeCharacter">ACTIVE CHARACTER</span><h2 id="comboPanelTitle">No character</h2></div>
@@ -260,6 +279,20 @@
               <button type="button" data-fps-preset="420">420</button>
             </div>
 
+            <div class="fps-monitor-row" id="fpsMonitorRow" data-status="disabled">
+              <div class="fps-monitor-copy">
+                <strong>Show FPS</strong>
+                <small id="fpsMonitorMessage">Display the measured frame rate over the game window.</small>
+              </div>
+              <output class="fps-live-value" id="fpsCurrentValue" aria-label="Current measured FPS" aria-live="polite">
+                <strong>—</strong><span>FPS</span>
+              </output>
+              <label class="switch fps-monitor-switch" title="Show measured FPS over the game">
+                <input type="checkbox" id="fpsShowToggle" aria-label="Show measured FPS over the game" />
+                <span class="switch-track"></span>
+              </label>
+            </div>
+
             <div class="fps-status" id="fpsStatus" data-status="disabled">
               <span class="fps-status-dot" aria-hidden="true"></span>
               <div><strong id="fpsStatusLabel">Disabled</strong><small id="fpsStatusMessage">Enable the limiter, then start the game.</small></div>
@@ -291,6 +324,18 @@
               <span class="switch-track"></span>
             </label>
           </div>
+        </article>
+        <article class="surface-card startup-dll-card">
+          <div class="startup-dll-heading">
+            <div><span class="eyebrow">GAME ADD-ONS</span><h2>Additional DLLs</h2></div>
+            <label class="switch" title="Load additional DLLs with the game">
+              <input type="checkbox" id="gameDllsEnabledToggle" disabled aria-label="Load additional DLLs" />
+              <span class="switch-track"></span>
+            </label>
+          </div>
+          <p id="gameDllsHelp">Add or remove DLLs at any time. Select a game executable when you are ready to launch.</p>
+          <div id="gameDllList" class="startup-dll-list"></div>
+          <button class="secondary-button" id="addGameDllsButton" disabled>Add DLLs</button>
         </article>
       </section>
 
@@ -376,13 +421,16 @@
           <h2 id="macroEditorTitle">Edit macro</h2>
         </div>
         <div class="macro-editor-header-actions">
-          <button class="macro-editor-details-toggle" id="toggleMacroDetailsButton" type="button" aria-pressed="false" title="Collapse macro details">Collapse</button>
+          <button class="macro-editor-details-toggle" id="toggleMacroDetailsButton" type="button" aria-pressed="false" aria-controls="macroEditorDetails" title="Collapse macro details">
+            <svg class="macro-editor-details-toggle-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg>
+            <span id="macroEditorDetailsToggleLabel">Collapse</span>
+          </button>
           <button class="macro-editor-close" id="closeMacroEditorButton" type="button" aria-label="Close editor">×</button>
         </div>
       </header>
 
       <div class="macro-editor-content">
-        <aside class="macro-editor-details" aria-label="Macro details">
+        <aside class="macro-editor-details" id="macroEditorDetails" aria-label="Macro details">
           <div class="macro-editor-character">
             <span>Character</span>
             <strong id="macroEditorCharacter">—</strong>
@@ -498,6 +546,58 @@
     </form>
   </div>
 
+  <div class="modal-backdrop hidden" id="macroUnsavedModal">
+    <div class="macro-unsaved-modal" role="alertdialog" aria-modal="true" aria-labelledby="macroUnsavedTitle" aria-describedby="macroUnsavedDescription">
+      <div class="macro-unsaved-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 2.8 19a1.4 1.4 0 0 0 1.2 2h16a1.4 1.4 0 0 0 1.2-2L12 3Z"/>
+          <path d="M12 9v5"/>
+          <path d="M12 17.5h.01"/>
+        </svg>
+      </div>
+      <span class="eyebrow">UNSAVED CHANGES</span>
+      <h2 id="macroUnsavedTitle">Discard your changes?</h2>
+      <p id="macroUnsavedDescription">This macro has changes that have not been saved. Leaving now will permanently discard them.</p>
+      <div class="macro-unsaved-actions">
+        <button class="secondary-button" id="keepEditingMacroButton" type="button">Keep editing</button>
+        <button class="danger-button" id="discardMacroChangesButton" type="button">Discard changes</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="importConflictModal">
+    <div class="import-conflict-modal" role="dialog" aria-modal="true" aria-labelledby="importConflictTitle" aria-describedby="importConflictDescription">
+      <div class="import-conflict-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 7h9a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a3 3 0 0 1 3-3Z"/>
+          <path d="M16 7V6a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v7a2 2 0 0 0 2 2"/>
+        </svg>
+      </div>
+      <span class="eyebrow">IMPORT CONFLICT</span>
+      <h2 id="importConflictTitle">Macro already exists</h2>
+      <p id="importConflictDescription">A macro with the same name, description, and tags already exists.</p>
+
+      <div class="import-conflict-existing">
+        <span>Existing macro</span>
+        <strong class="preserve-ltr" id="importConflictMacroName">Macro</strong>
+        <small>Character: <b class="preserve-ltr" id="importConflictCharacter">Character</b></small>
+      </div>
+
+      <label class="import-conflict-name" for="importConflictNameInput">
+        <span>New name</span>
+        <input id="importConflictNameInput" type="text" maxlength="60" autocomplete="off" spellcheck="false" />
+      </label>
+      <p class="import-conflict-error hidden" id="importConflictError" role="alert"></p>
+      <p class="import-conflict-protected hidden" id="importConflictProtected">Built-in macros are protected. Enter a different name or cancel.</p>
+
+      <div class="import-conflict-actions">
+        <button class="secondary-button" id="cancelImportConflictButton" type="button">Cancel</button>
+        <button class="secondary-button import-conflict-rename" id="renameImportConflictButton" type="button">Change name</button>
+        <button class="primary-button import-conflict-replace" id="replaceImportConflictButton" type="button">Replace</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="macroDeleteModal">
     <div class="hotkey-modal delete-modal" role="dialog" aria-modal="true" aria-labelledby="macroDeleteTitle">
       <span class="eyebrow">DELETE MACRO</span>
@@ -534,6 +634,6 @@
   </div>
 
   <div class="toast-container" id="toastContainer"></div>
-  <script src="app.js?v=1.7.6-ui-refresh-1"></script>
+  <script src="app.js?v=1.7.7-ui-refresh-12"></script>
 </body>
 </html>
