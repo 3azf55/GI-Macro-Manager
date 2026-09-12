@@ -258,6 +258,7 @@ $runtimeText = [System.IO.File]::ReadAllText($runtimePath)
 $macroEditorServiceText = [System.IO.File]::ReadAllText($macroEditorServicePath)
 $appJsText = [System.IO.File]::ReadAllText($appJsPath)
 $indexText = [System.IO.File]::ReadAllText($indexPath)
+$stylesText = [System.IO.File]::ReadAllText($stylesPath)
 $mainFormText = [System.IO.File]::ReadAllText($mainFormPath)
 $generatedPerformanceSettings = @(
     '#NoEnv',
@@ -438,7 +439,6 @@ Assert-True (-not $appJsText.Contains('button.dataset.tooltip')) `
 Assert-True ($engineText.Contains('candidates.Push(A_ScriptDir . "\dist\UMM.UI.exe")')) `
     'The source-tree engine must prefer the freshly staged dist UI over a legacy root executable.'
 $indexText = [System.IO.File]::ReadAllText($indexPath)
-$stylesText = [System.IO.File]::ReadAllText($stylesPath)
 $mainFormText = [System.IO.File]::ReadAllText($mainFormPath)
 $removedHotkeyFocusSentence = 'Hotkeys are active only while the selected game window ' + 'is focused'
 Assert-True (-not $indexText.Contains($removedHotkeyFocusSentence) -and `
